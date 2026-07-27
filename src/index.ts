@@ -40,7 +40,18 @@ const SOURCES: FeedSource[] = [
     label: "Stadtpolizei Zürich",
     url: "https://www.stadt-zuerich.ch/de/politik-und-verwaltung/stadtverwaltung/sid/stapo/_jcr_content/mainparsys/teaser.rss", // TODO: verifizieren
   },
+  {
+    key: "gemeinderat-zuerich",
+    label: "Gemeinderat Zürich",
+    url: "https://www.gemeinderat-zuerich.ch/de/geschaefte/export.php?export=rss",
+  },
 ];
+
+// Der Gemeinderat-Feed ist komplett ungefiltert (geht Jahre zurück, tausende
+// Einträge). Ohne Cutoff würde ein einzelner Sync-Durchlauf zu lange dauern
+// bzw. das Worker-Zeitlimit sprengen - daher nur Geschäfte der letzten X Tage
+// übernehmen. Läuft der Cron alle 15 Min, reicht ein moderater Puffer.
+const GEMEINDERAT_MAX_AGE_DAYS = 45;
 
 // Baugesuche Kanton Zürich (opendata.swiss) sind als GPKG (Geopackage)
 // publiziert, kein einfaches RSS/CSV. Das lohnt sich als eigener zweiter
@@ -61,21 +72,28 @@ Stadtmagazin für Zürich. Halte dich an diesen Stil:
 - Zielpublikum: Zürcher:innen, die direkt angesprochen werden ("du"), nicht
   "man" oder "die Leser".
 - Durchgängig gendern mit Doppelpunkt (z.B. "Bewohner:innen", "Politiker:innen").
-- Lead-Satz zuerst: worum geht's, was steht auf dem Spiel, warum ist es für
-  Zürich relevant. Kein "Die Stadt Zürich teilt mit, dass..." als Einstieg.
 - Sachlich-direkt, ohne Boulevard-Übertreibung, aber pointiert und mit klarer
   Haltung, wo angebracht. Bei Blaulicht-Themen nüchtern und faktenbasiert,
   keine reisserische Sprache.
 - Kurze Sätze, aktive Verben, keine Behördensprache/Amtsdeutsch übernehmen -
   in eigenen Worten erklären, was es für die Stadt/die Leute bedeutet.
-- Länge: 120-220 Wörter, 2-4 Absätze.
-- Am Schluss falls sinnvoll: ein Satz Einordnung/Kontext (was folgt daraus,
-  was ist offen).
 - Erfinde keine Fakten, Zahlen oder Zitate, die nicht in der Vorlage stehen.
   Wenn Informationen fehlen, lass die Lücke oder formuliere vorsichtig
   ("laut Mitteilung", "unklar bleibt...").
-- Gib nur den Artikeltext zurück, keine Überschrift-Präfixe wie "Titel:",
-  keine Meta-Kommentare.
+
+Du lieferst drei Teile:
+- title: eine prägnante, konkrete Schlagzeile (keine Frage, kein Clickbait,
+  nennt worum es geht). Maximal ca. 12 Wörter.
+- lead: 1-2 Sätze, die Kern und Relevanz auf den Punkt bringen - das, was
+  jemand liest, bevor er entscheidet weiterzulesen. Kein "Die Stadt Zürich
+  teilt mit, dass..." als Einstieg.
+- body: der Fliesstext, 120-220 Wörter, 2-4 Absätze, baut auf dem Lead auf
+  und liefert die Details. Am Schluss falls sinnvoll ein Satz Einordnung
+  (was folgt daraus, was ist offen).
+
+Antworte AUSSCHLIESSLICH mit einem JSON-Objekt in diesem Format, ohne
+Markdown-Codeblock, ohne Erklärungen davor oder danach:
+{"title": "...", "lead": "...", "body": "..."}
 `.trim();
 
 export default {
@@ -119,24 +137,32 @@ async function runFetchCycle(env: Env): Promise<{ source: string; count: number;
 }
 
 async function upsertItems(env: Env, items: NewsItem[]) {
+  if (items.length === 0) return;
   const fetchedAt = new Date().toISOString();
-  for (const item of items) {
-    await env.DB.prepare(
-      `INSERT INTO news_items (id, source, source_label, title, link, summary, published_at, fetched_at, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'neu')
-       ON CONFLICT(id) DO NOTHING`
-    )
-      .bind(
-        item.id,
-        item.source,
-        item.source_label,
-        item.title,
-        item.link,
-        item.summary,
-        item.published_at,
-        fetchedAt
+  const stmt = env.DB.prepare(
+    `INSERT INTO news_items (id, source, source_label, title, link, summary, published_at, fetched_at, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'neu')
+     ON CONFLICT(id) DO NOTHING`
+  );
+  // Batch statt einzelner sequentieller awaits - bei grösseren Feeds
+  // (z.B. Gemeinderat) sonst zu langsam / riskiert das Worker-Zeitlimit.
+  const batchSize = 50;
+  for (let i = 0; i < items.length; i += batchSize) {
+    const chunk = items.slice(i, i + batchSize);
+    await env.DB.batch(
+      chunk.map((item) =>
+        stmt.bind(
+          item.id,
+          item.source,
+          item.source_label,
+          item.title,
+          item.link,
+          item.summary,
+          item.published_at,
+          fetchedAt
+        )
       )
-      .run();
+    );
   }
 }
 
@@ -149,16 +175,37 @@ function parseRss(xml: string, sourceKey: string, sourceLabel: string): NewsItem
   const items: NewsItem[] = [];
   const itemRegex = /<item>([\s\S]*?)<\/item>/g;
   let match: RegExpExecArray | null;
+  const isGemeinderat = sourceKey === "gemeinderat-zuerich";
+  const cutoff = isGemeinderat ? Date.now() - GEMEINDERAT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000 : null;
 
   while ((match = itemRegex.exec(xml)) !== null) {
     const block = match[1];
-    const title = clean(extractTag(block, "title"));
+    let title = clean(extractTag(block, "title"));
     const link = clean(extractTag(block, "link"));
     const description = clean(extractTag(block, "description"));
-    const pubDate = extractTag(block, "pubDate");
+    const pubDateRaw = extractTag(block, "pubDate");
     const guid = clean(extractTag(block, "guid")) || link;
 
     if (!link || !title) continue;
+
+    let publishedAt: string | null;
+    let summary: string;
+
+    if (isGemeinderat) {
+      // Format hier: "TT.MM.JJJJ" statt RFC-822, und <description> ist eine
+      // Geschäftsnummer (z.B. "2026/400"), keine Zusammenfassung - daher als
+      // Präfix in den Titel, statt als Summary anzuzeigen.
+      publishedAt = parseSwissDate(pubDateRaw);
+      if (description) title = `${description} – ${title}`;
+      summary = "";
+      if (cutoff !== null) {
+        const ts = publishedAt ? new Date(publishedAt).getTime() : null;
+        if (ts === null || ts < cutoff) continue; // zu alt, überspringen
+      }
+    } else {
+      publishedAt = safeDate(pubDateRaw);
+      summary = description.slice(0, 600);
+    }
 
     items.push({
       id: `${sourceKey}::${guid}`.slice(0, 500),
@@ -166,12 +213,22 @@ function parseRss(xml: string, sourceKey: string, sourceLabel: string): NewsItem
       source_label: sourceLabel,
       title,
       link,
-      summary: description.slice(0, 600),
-      published_at: safeDate(pubDate),
+      summary,
+      published_at: publishedAt,
     });
   }
 
   return items;
+}
+
+// Parst "TT.MM.JJJJ" (Schweizer Datumsformat), das new Date() nicht
+// zuverlässig versteht.
+function parseSwissDate(value: string): string | null {
+  const m = value.trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!m) return null;
+  const [, day, month, year] = m;
+  const d = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 function extractTag(block: string, tag: string): string {
@@ -234,7 +291,13 @@ function extractMainText(html: string): string {
   return text.slice(0, 8000);
 }
 
-async function generateDraft(env: Env, item: any): Promise<string> {
+interface DraftResult {
+  title: string;
+  lead: string;
+  body: string;
+}
+
+async function generateDraft(env: Env, item: any): Promise<DraftResult> {
   const fullText = await fetchFullText(item.link);
   const sourceText = fullText || item.summary || item.title;
 
@@ -258,7 +321,7 @@ Schreib daraus einen Tsüri.ch-Artikelentwurf gemäss Stilguide.`;
     },
     body: JSON.stringify({
       model: "claude-sonnet-5",
-      max_tokens: 1000,
+      max_tokens: 1200,
       system: TSURI_STYLE_GUIDE,
       messages: [{ role: "user", content: userPrompt }],
     }),
@@ -271,7 +334,29 @@ Schreib daraus einen Tsüri.ch-Artikelentwurf gemäss Stilguide.`;
 
   const data = (await res.json()) as { content: { type: string; text?: string }[] };
   const textBlock = data.content.find((b) => b.type === "text");
-  return textBlock?.text?.trim() ?? "";
+  const raw = (textBlock?.text ?? "").trim();
+
+  return parseDraftJson(raw);
+}
+
+// Erwartet JSON von Claude, räumt vorsichtshalber mögliche Markdown-Codefences
+// weg und fällt bei Parse-Fehlern darauf zurück, den Rohtext als body zu
+// nehmen statt komplett zu scheitern.
+function parseDraftJson(raw: string): DraftResult {
+  let cleaned = raw.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(json)?\s*/i, "").replace(/```\s*$/, "").trim();
+  }
+  try {
+    const parsed = JSON.parse(cleaned);
+    return {
+      title: String(parsed.title ?? "").trim(),
+      lead: String(parsed.lead ?? "").trim(),
+      body: String(parsed.body ?? "").trim(),
+    };
+  } catch {
+    return { title: "", lead: "", body: raw };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -376,10 +461,21 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     try {
       const draft = await generateDraft(env, item);
       const generatedAt = new Date().toISOString();
-      await env.DB.prepare("UPDATE news_items SET draft_text = ?, draft_generated_at = ? WHERE id = ?")
-        .bind(draft, generatedAt, id)
+      await env.DB.prepare(
+        "UPDATE news_items SET draft_title = ?, draft_lead = ?, draft_text = ?, draft_generated_at = ? WHERE id = ?"
+      )
+        .bind(draft.title, draft.lead, draft.body, generatedAt, id)
         .run();
-      return new Response(JSON.stringify({ ok: true, draft_text: draft, draft_generated_at: generatedAt }), { headers });
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          draft_title: draft.title,
+          draft_lead: draft.lead,
+          draft_text: draft.body,
+          draft_generated_at: generatedAt,
+        }),
+        { headers }
+      );
     } catch (err: any) {
       return new Response(JSON.stringify({ error: String(err?.message ?? err) }), { status: 502, headers });
     }
