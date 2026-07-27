@@ -2,7 +2,7 @@
 
 Ad-hoc Feed lokaler Zürich-Quellen (RSS) mit Review-UI für die Redaktion.
 Läuft komplett auf Cloudflare (Worker + D1), Frontend wird als Static Asset
-mitausgeliefert.
+mitausgeliefert. 
 
 ## Setup
 
