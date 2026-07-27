@@ -181,6 +181,30 @@
     color: var(--ink-soft);
     margin-top: 6px;
   }
+  .draft label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--ink-soft);
+    margin: 12px 0 4px;
+  }
+  .draft label:first-child { margin-top: 0; }
+  .draft input[type="text"] {
+    width: 100%;
+    font-family: "Inter", sans-serif;
+    font-weight: 800;
+    font-size: 16px;
+    padding: 10px 12px;
+    border: 2px solid var(--ink);
+    background: var(--paper);
+    color: var(--ink);
+  }
+  .draft textarea.lead {
+    min-height: 60px;
+    font-weight: 600;
+  }
 
   .empty {
     text-align: center;
@@ -316,9 +340,6 @@
     modalBackdrop.classList.add("open");
     document.body.style.overflow = "hidden";
 
-    // Manche Seiten blockieren das Einbetten per X-Frame-Options/CSP. Der
-    // Browser meldet das nicht direkt an uns - Heuristik: wenn nach kurzer
-    // Zeit kein "load" ausgelöst wurde, zeigen wir den Fallback-Hinweis.
     let loaded = false;
     modalFrame.onload = () => { loaded = true; };
     clearTimeout(fallbackTimer);
@@ -392,16 +413,21 @@
         draftBox.innerHTML = `<p style="color:var(--warn); font-weight:600;">Fehler: ${data.error || "unbekannt"}</p>`;
         return;
       }
-      renderDraftBox(draftBox, data.draft_text, data.draft_generated_at);
+      renderDraftBox(draftBox, data.draft_title, data.draft_lead, data.draft_text, data.draft_generated_at);
     } finally {
       button.disabled = false;
       button.textContent = original;
     }
   }
 
-  function renderDraftBox(draftBox, text, generatedAt) {
+  function renderDraftBox(draftBox, title, lead, body, generatedAt) {
     draftBox.innerHTML = `
-      <textarea>${text || ""}</textarea>
+      <label>Titel</label>
+      <input type="text" value="${(title || "").replace(/"/g, "&quot;")}" />
+      <label>Lead</label>
+      <textarea class="lead">${lead || ""}</textarea>
+      <label>Text</label>
+      <textarea>${body || ""}</textarea>
       <div class="draft-meta">Entwurf erzeugt ${formatDate(generatedAt)} · vor dem Publizieren gegenlesen</div>
     `;
   }
@@ -432,8 +458,6 @@
           openModal(item.link, item.title);
         }
       } catch {
-        // Check selbst fehlgeschlagen -> im Zweifel Modal versuchen,
-        // der Zeit-Fallback im Modal greift dann als zweite Absicherung.
         openModal(item.link, item.title);
       } finally {
         titleLink.style.opacity = "";
@@ -464,7 +488,7 @@
     });
 
     if (item.draft_text) {
-      renderDraftBox(draftBox, item.draft_text, item.draft_generated_at);
+      renderDraftBox(draftBox, item.draft_title, item.draft_lead, item.draft_text, item.draft_generated_at);
     }
 
     return div;
