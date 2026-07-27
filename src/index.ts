@@ -275,6 +275,45 @@ Schreib daraus einen Tsüri.ch-Artikelentwurf gemäss Stilguide.`;
 }
 
 // ---------------------------------------------------------------------------
+// Prüft serverseitig (ohne Browser-CORS-Einschränkungen), ob eine Seite sich
+// per iFrame einbetten lässt. Browser können das selbst nicht zuverlässig
+// erkennen, weil sie den Fehler nur intern anzeigen (z.B. Firefox' eigene
+// "darf nicht öffnen"-Seite lädt "erfolgreich" innerhalb des iFrames).
+// ---------------------------------------------------------------------------
+async function checkEmbeddable(target: string): Promise<boolean> {
+  try {
+    let res = await fetch(target, {
+      method: "HEAD",
+      headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" },
+    });
+    // Manche Server unterstützen kein HEAD -> auf GET zurückfallen, Body verwerfen.
+    if (res.status === 405 || res.status === 501) {
+      res = await fetch(target, {
+        method: "GET",
+        headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" },
+      });
+      res.body?.cancel();
+    }
+
+    const xfo = (res.headers.get("x-frame-options") || "").toLowerCase();
+    if (xfo.includes("deny") || xfo.includes("sameorigin")) return false;
+
+    const csp = (res.headers.get("content-security-policy") || "").toLowerCase();
+    const frameAncestorsMatch = csp.match(/frame-ancestors\s+([^;]+)/);
+    if (frameAncestorsMatch) {
+      const value = frameAncestorsMatch[1].trim();
+      if (value === "'none'" || value === "'self'") return false;
+    }
+
+    return true;
+  } catch {
+    // Bei Fehlern (Timeout, Netzwerk) im Zweifel embeddable annehmen -
+    // das Frontend hat ohnehin noch den Zeit-Fallback als zweite Absicherung.
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // API
 // ---------------------------------------------------------------------------
 
@@ -283,6 +322,15 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
   if (url.pathname === "/api/sources" && request.method === "GET") {
     return new Response(JSON.stringify(SOURCES.map((s) => ({ key: s.key, label: s.label }))), { headers });
+  }
+
+  if (url.pathname === "/api/check-embeddable" && request.method === "GET") {
+    const target = url.searchParams.get("url");
+    if (!target) {
+      return new Response(JSON.stringify({ error: "url fehlt" }), { status: 400, headers });
+    }
+    const embeddable = await checkEmbeddable(target);
+    return new Response(JSON.stringify({ embeddable }), { headers });
   }
 
   if (url.pathname === "/api/items" && request.method === "GET") {
