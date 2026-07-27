@@ -420,9 +420,24 @@
       </div>
     `;
     const titleLink = div.querySelector("h2 a");
-    titleLink.addEventListener("click", (e) => {
+    titleLink.addEventListener("click", async (e) => {
       e.preventDefault();
-      openModal(item.link, item.title);
+      titleLink.style.opacity = "0.6";
+      try {
+        const res = await fetch(`/api/check-embeddable?url=${encodeURIComponent(item.link)}`);
+        const data = await res.json();
+        if (data.embeddable === false) {
+          window.open(item.link, "_blank", "noopener");
+        } else {
+          openModal(item.link, item.title);
+        }
+      } catch {
+        // Check selbst fehlgeschlagen -> im Zweifel Modal versuchen,
+        // der Zeit-Fallback im Modal greift dann als zweite Absicherung.
+        openModal(item.link, item.title);
+      } finally {
+        titleLink.style.opacity = "";
+      }
     });
 
     const actions = div.querySelector(".actions");
