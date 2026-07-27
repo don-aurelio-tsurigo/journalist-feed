@@ -13,7 +13,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "tsri-news-feed-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "b4f5dc5b-1346-41fb-b8a5-305c15a26645"
 
 # Holt alle 15 Minuten neue Einträge von den Quellen.
 [triggers]
