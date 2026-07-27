@@ -4,321 +4,39 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Tsüri Newsfeed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
-    --ink: #1b2430;
-    --ink-soft: #4a5568;
-    --paper: #f7f5f0;
-    --paper-raised: #ffffff;
-    --line: #e2ddd1;
-    --accent: #3f6b5d;
-    --accent-soft: #e7efe9;
-    --warn: #a1462f;
+    --ink: #0d0d0d;
+    --ink-soft: #55575c;
+    --paper: #ffffff;
+    --line: #e7e7e7;
+    --blue: #4fa3e0;
+    --blue-deep: #1c7dc4;
+    --blue-tint: #cfe9fb;
+    --warn: #c0392b;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     background: var(--paper);
     color: var(--ink);
-    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-family: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
   }
+
   header {
-    background: var(--ink);
-    color: #f2efe8;
-    padding: 20px 28px;
+    background: var(--paper);
+    border-bottom: 3px solid var(--ink);
+    padding: 18px 28px;
     display: flex;
-    align-items: baseline;
-    justify-content: space-between; 
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-  header h1 {
-    font-family: Georgia, "Iowan Old Style", serif;
-    font-size: 22px;
-    font-weight: 600;
-    margin: 0;
-    letter-spacing: 0.2px;
-  }
-  header .sub {
-    color: #b7c2c9;
-    font-size: 13px;
-  }
-  #refreshBtn {
-    background: var(--accent);
-    color: white;
-    border: none;
-    padding: 8px 14px;
-    border-radius: 4px;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  #refreshBtn:hover { opacity: 0.9; }
-  #refreshBtn:disabled { opacity: 0.5; cursor: default; }
-
-  main {
-    max-width: 860px;
-    margin: 0 auto;
-    padding: 24px 20px 60px;
-  }
-
-  .tabs {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 18px;
-    border-bottom: 1px solid var(--line);
-    flex-wrap: wrap;
-  }
-  .tab {
-    padding: 8px 14px;
-    font-size: 13px;
-    color: var(--ink-soft);
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    user-select: none;
-  }
-  .tab.active {
-    color: var(--ink);
-    border-bottom-color: var(--accent);
-    font-weight: 600;
-  }
-
-  .item {
-    background: var(--paper-raised);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 16px 18px;
-    margin-bottom: 12px;
-  }
-  .item .meta {
-    font-size: 12px;
-    color: var(--ink-soft);
-    display: flex;
-    gap: 10px;
     align-items: center;
-    margin-bottom: 6px;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 14px;
   }
-  .badge {
-    background: var(--accent-soft);
-    color: var(--accent);
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-  }
-  .item h2 {
-    font-family: Georgia, "Iowan Old Style", serif;
-    font-size: 17px;
-    margin: 0 0 6px;
-    line-height: 1.35;
-  }
-  .item h2 a { color: var(--ink); text-decoration: none; }
-  .item h2 a:hover { text-decoration: underline; }
-  .item p {
-    font-size: 13.5px;
-    color: var(--ink-soft);
-    line-height: 1.5;
-    margin: 0 0 12px;
-  }
-  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .actions button {
-    font-size: 12px;
-    padding: 6px 12px;
-    border-radius: 4px;
-    border: 1px solid var(--line);
-    background: var(--paper);
-    color: var(--ink);
-    cursor: pointer;
-  }
-  .actions button:hover { border-color: var(--accent); }
-  .actions button.danger:hover { border-color: var(--warn); color: var(--warn); }
-  .actions button.primary {
-    background: var(--accent);
-    color: white;
-    border-color: var(--accent);
-  }
-  .actions button.primary:hover { opacity: 0.9; }
-  .actions button:disabled { opacity: 0.5; cursor: default; }
-
-  .draft {
-    margin-top: 12px;
-    border-top: 1px dashed var(--line);
-    padding-top: 12px;
-  }
-  .draft textarea {
-    width: 100%;
-    min-height: 160px;
-    font-family: Georgia, "Iowan Old Style", serif;
-    font-size: 14px;
-    line-height: 1.5;
-    padding: 10px;
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    background: var(--paper);
-    color: var(--ink);
-    resize: vertical;
-  }
-  .draft .draft-meta {
-    font-size: 11px;
-    color: var(--ink-soft);
-    margin-top: 6px;
-  }
-
-  .empty {
-    text-align: center;
-    color: var(--ink-soft);
-    padding: 60px 0;
-    font-size: 14px;
-  }
-</style>
-</head>
-<body>
-
-<header>
-  <div>
-    <h1>Tsüri Newsfeed</h1>
-    <div class="sub">Lokale Quellen im Blick – Zürich</div>
-  </div>
-  <button id="refreshBtn">Jetzt aktualisieren</button>
-</header>
-
-<main>
-  <div class="tabs" id="tabs">
-    <div class="tab active" data-status="neu">Neu</div>
-    <div class="tab" data-status="interessant">Interessant</div>
-    <div class="tab" data-status="beobachten">Beobachten</div>
-    <div class="tab" data-status="verworfen">Verworfen</div>
-    <div class="tab" data-status="">Alle</div>
-  </div>
-  <div id="list"></div>
-</main>
-
-<script>
-  let currentStatus = "neu";
-
-  const tabsEl = document.getElementById("tabs");
-  const listEl = document.getElementById("list");
-  const refreshBtn = document.getElementById("refreshBtn");
-
-  tabsEl.addEventListener("click", (e) => {
-    const tab = e.target.closest(".tab");
-    if (!tab) return;
-    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-    tab.classList.add("active");
-    currentStatus = tab.dataset.status;
-    loadItems();
-  });
-
-  refreshBtn.addEventListener("click", async () => {
-    refreshBtn.disabled = true;
-    refreshBtn.textContent = "Lädt Quellen …";
-    try {
-      await fetch("/api/run", { method: "POST" });
-      await loadItems();
-    } finally {
-      refreshBtn.disabled = false;
-      refreshBtn.textContent = "Jetzt aktualisieren";
-    }
-  });
-
-  function formatDate(iso) {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return d.toLocaleString("de-CH", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-  }
-
-  async function setStatus(id, status) {
-    await fetch(`/api/items/${encodeURIComponent(id)}/status`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
-    });
-    loadItems();
-  }
-
-  async function generateDraft(id, button, draftBox) {
-    button.disabled = true;
-    const original = button.textContent;
-    button.textContent = "Entwirft …";
-    try {
-      const res = await fetch(`/api/items/${encodeURIComponent(id)}/draft`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        draftBox.innerHTML = `<p style="color:var(--warn)">Fehler: ${data.error || "unbekannt"}</p>`;
-        return;
-      }
-      renderDraftBox(draftBox, data.draft_text, data.draft_generated_at);
-    } finally {
-      button.disabled = false;
-      button.textContent = original;
-    }
-  }
-
-  function renderDraftBox(draftBox, text, generatedAt) {
-    draftBox.innerHTML = `
-      <textarea>${text || ""}</textarea>
-      <div class="draft-meta">Entwurf erzeugt ${formatDate(generatedAt)} · vor dem Publizieren gegenlesen</div>
-    `;
-  }
-
-  function renderItem(item) {
-    const div = document.createElement("div");
-    div.className = "item";
-    div.innerHTML = `
-      <div class="meta">
-        <span class="badge">${item.source_label}</span>
-        <span>${formatDate(item.published_at || item.fetched_at)}</span>
-      </div>
-      <h2><a href="${item.link}" target="_blank" rel="noopener">${item.title}</a></h2>
-      <p>${item.summary || ""}</p>
-      <div class="actions"></div>
-      <div class="draft"></div>
-    `;
-    const actions = div.querySelector(".actions");
-    const draftBox = div.querySelector(".draft");
-
-    const draftBtn = document.createElement("button");
-    draftBtn.className = "primary";
-    draftBtn.textContent = item.draft_text ? "Artikel neu entwerfen" : "Artikel entwerfen";
-    draftBtn.addEventListener("click", () => generateDraft(item.id, draftBtn, draftBox));
-    actions.appendChild(draftBtn);
-
-    const buttons = [
-      ["interessant", "Interessant"],
-      ["beobachten", "Beobachten"],
-      ["verworfen", "Verwerfen"],
-    ].filter(([s]) => s !== item.status);
-
-    buttons.forEach(([status, label]) => {
-      const btn = document.createElement("button");
-      btn.textContent = label;
-      if (status === "verworfen") btn.className = "danger";
-      btn.addEventListener("click", () => setStatus(item.id, status));
-      actions.appendChild(btn);
-    });
-
-    if (item.draft_text) {
-      renderDraftBox(draftBox, item.draft_text, item.draft_generated_at);
-    }
-
-    return div;
-  }
-
-  async function loadItems() {
-    const params = new URLSearchParams();
-    if (currentStatus) params.set("status", currentStatus);
-    params.set("limit", "100");
-    const res = await fetch(`/api/items?${params}`);
-    const items = await res.json();
-    listEl.innerHTML = "";
-    if (!items.length) {
-      listEl.innerHTML = '<div class="empty">Keine Einträge in dieser Ansicht.</div>';
-      return;
-    }
-    items.forEach((item) => listEl.appendChild(renderItem(item)));
-  }
-
-  loadItems();
-</script>
-
-</body>
-</html>
+  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .brand .wordmark {
+    font-family: "Archivo Black", "Inter", sans-serif;
+    font-size:
