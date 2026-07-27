@@ -131,6 +131,37 @@
   }
   .actions button:hover { border-color: var(--accent); }
   .actions button.danger:hover { border-color: var(--warn); color: var(--warn); }
+  .actions button.primary {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+  .actions button.primary:hover { opacity: 0.9; }
+  .actions button:disabled { opacity: 0.5; cursor: default; }
+
+  .draft {
+    margin-top: 12px;
+    border-top: 1px dashed var(--line);
+    padding-top: 12px;
+  }
+  .draft textarea {
+    width: 100%;
+    min-height: 160px;
+    font-family: Georgia, "Iowan Old Style", serif;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--paper);
+    color: var(--ink);
+    resize: vertical;
+  }
+  .draft .draft-meta {
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin-top: 6px;
+  }
 
   .empty {
     text-align: center;
@@ -204,6 +235,31 @@
     loadItems();
   }
 
+  async function generateDraft(id, button, draftBox) {
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = "Entwirft …";
+    try {
+      const res = await fetch(`/api/items/${encodeURIComponent(id)}/draft`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        draftBox.innerHTML = `<p style="color:var(--warn)">Fehler: ${data.error || "unbekannt"}</p>`;
+        return;
+      }
+      renderDraftBox(draftBox, data.draft_text, data.draft_generated_at);
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  function renderDraftBox(draftBox, text, generatedAt) {
+    draftBox.innerHTML = `
+      <textarea>${text || ""}</textarea>
+      <div class="draft-meta">Entwurf erzeugt ${formatDate(generatedAt)} · vor dem Publizieren gegenlesen</div>
+    `;
+  }
+
   function renderItem(item) {
     const div = document.createElement("div");
     div.className = "item";
@@ -215,8 +271,17 @@
       <h2><a href="${item.link}" target="_blank" rel="noopener">${item.title}</a></h2>
       <p>${item.summary || ""}</p>
       <div class="actions"></div>
+      <div class="draft"></div>
     `;
     const actions = div.querySelector(".actions");
+    const draftBox = div.querySelector(".draft");
+
+    const draftBtn = document.createElement("button");
+    draftBtn.className = "primary";
+    draftBtn.textContent = item.draft_text ? "Artikel neu entwerfen" : "Artikel entwerfen";
+    draftBtn.addEventListener("click", () => generateDraft(item.id, draftBtn, draftBox));
+    actions.appendChild(draftBtn);
+
     const buttons = [
       ["interessant", "Interessant"],
       ["beobachten", "Beobachten"],
@@ -230,6 +295,10 @@
       btn.addEventListener("click", () => setStatus(item.id, status));
       actions.appendChild(btn);
     });
+
+    if (item.draft_text) {
+      renderDraftBox(draftBox, item.draft_text, item.draft_generated_at);
+    }
 
     return div;
   }
