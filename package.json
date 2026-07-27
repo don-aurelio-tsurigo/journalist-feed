@@ -1,0 +1,16 @@
+{
+  "name": "tsri-news-feed",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init:local": "wrangler d1 execute tsri-news-feed-db --file=./schema.sql",
+    "db:init:remote": "wrangler d1 execute tsri-news-feed-db --file=./schema.sql --remote",
+    "run:once": "curl -X POST http://localhost:8787/api/run"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0",
+    "@cloudflare/workers-types": "^4.20250101.0"
+  }
+}
