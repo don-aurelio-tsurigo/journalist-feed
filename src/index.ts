@@ -58,9 +58,9 @@ const GEMEINDERAT_MAX_AGE_DAYS = 45;
 // nichts), sondern die Subrubrik "BP-ZH01" ("Kommunales Bauprojekt" im
 // Tenant kabzh). Das Feld "registrationOfficeTown" wird client-seitig auf
 // "Zürich" gefiltert, weil die Subrubrik den ganzen Kanton umfasst, nicht
-// nur die Stadt. "titleDe" aus der CSV liefert bereits einen brauchbaren
-// Titel (z.B. "Bauprojekt: Culmannstrasse 65, Zürich") - keine
-// PDF-Extraktion nötig für einen sinnvollen Titel.
+// nur die Stadt. "titleDe" aus der Bulk-CSV liefert bereits einen Titel mit
+// Adresse; die echte Projektbeschreibung + Kreis stecken nur in der
+// Einzel-Publikations-XML und werden pro Item zusätzlich nachgeladen.
 const BAUGESUCHE_SOURCE = { key: "baugesuche-zh", label: "Baugesuche Stadt Zürich" };
 const BAUGESUCHE_MAX_AGE_DAYS = 30;
 const BAUGESUCHE_TOWN = "Zürich";
@@ -172,7 +172,46 @@ async function fetchBaugesuche(): Promise<NewsItem[]> {
   const res = await fetch(url, { headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" } });
   if (!res.ok) throw new Error(`Amtsblattportal API ${res.status}`);
   const csvText = await res.text();
-  return parseBaugesucheCsv(csvText);
+  const baseItems = parseBaugesucheCsv(csvText);
+
+  // Für jedes Stadt-Zürich-Baugesuch die Einzel-Publikation nachladen, um
+  // die echte Projektbeschreibung + Kreis/Bauzone zu bekommen (steckt nicht
+  // in der Bulk-CSV-Liste, nur in der Einzel-Publikations-XML). Fehler bei
+  // einzelnen Items werden toleriert - dann bleibt der Basis-Titel stehen.
+  const enriched = await Promise.all(
+    baseItems.map(async (item) => {
+      const publicationId = item.id.split("::")[1];
+      const details = await fetchBaugesucheDetails(publicationId);
+      if (!details) return item;
+      const parts = [details.projectDescription, details.district ? `Kreis: ${details.district}` : ""].filter(
+        Boolean
+      );
+      return { ...item, summary: parts.join(" · ") || item.summary };
+    })
+  );
+
+  return enriched;
+}
+
+interface BaugesucheDetails {
+  projectDescription: string;
+  district: string;
+}
+
+async function fetchBaugesucheDetails(publicationId: string): Promise<BaugesucheDetails | null> {
+  try {
+    const res = await fetch(`https://amtsblattportal.ch/api/v1/publications/${publicationId}/xml`, {
+      headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" },
+    });
+    if (!res.ok) return null;
+    const xml = await res.text();
+    const projectDescription = clean(extractTag(xml, "projectDescription"));
+    const district = clean(extractTag(xml, "district"));
+    if (!projectDescription && !district) return null;
+    return { projectDescription, district };
+  } catch {
+    return null;
+  }
 }
 
 // Vollwertiger CSV-Parser (kein naives Line-Splitting!): Felder können in
@@ -441,7 +480,11 @@ interface DraftResult {
 }
 
 async function generateDraft(env: Env, item: any): Promise<DraftResult> {
-  const fullText = await fetchFullText(item.link);
+  // Bei Baugesuche ist der Link ein PDF, kein HTML - fetchFullText würde
+  // dort nur Binär-Kauderwelsch liefern. Die Summary enthält hier bereits
+  // die echte Projektbeschreibung aus der Einzel-Publikations-XML, die
+  // reicht als Quelle.
+  const fullText = item.source === "baugesuche-zh" ? "" : await fetchFullText(item.link);
   const sourceText = fullText || item.summary || item.title;
 
   const userPrompt = `Quelle: ${item.source_label}
