@@ -281,6 +281,17 @@
   .fulltext {
     display: none;
   }
+  .fulltext-warning {
+    display: none;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--warn);
+    background: #fbeae6;
+    border: 1px solid var(--warn);
+    padding: 8px 10px;
+    margin-top: 10px;
+  }
+  .fulltext-warning.show { display: block; }
   .fulltext.open {
     display: block;
     margin-top: 12px;
@@ -400,6 +411,7 @@
   let currentStatus = "neu";
   let currentSource = "";
   const selectedIds = new Set();
+  const sourceRequiresFulltext = new Map();
 
   const tabsEl = document.getElementById("tabs");
   const sourceTabsEl = document.getElementById("sourceTabs");
@@ -465,6 +477,7 @@
       const res = await fetch("/api/sources");
       const sources = await res.json();
       sources.forEach((s) => {
+        sourceRequiresFulltext.set(s.key, !!s.requiresFulltext);
         const tab = document.createElement("div");
         tab.className = "tab";
         tab.dataset.source = s.key;
@@ -577,7 +590,23 @@
     draftBox.querySelector(".discard-btn").addEventListener("click", () => discardDraft(id, draftBtn, draftBox));
   }
 
-  async function toggleFulltextBox(item, fulltextBox, fulltextBtn) {
+  // Sperrt "Artikel entwerfen", solange eine Quelle mit Paywall/dünnem
+  // Teaser (requiresFulltext) noch keinen manuell eingefügten Volltext hat.
+  function applyFulltextGate(item, draftBtn, warningEl) {
+    const needsFulltext = sourceRequiresFulltext.get(item.source) === true;
+    const hasFulltext = !!(item.manual_fulltext && item.manual_fulltext.trim());
+    if (needsFulltext && !hasFulltext) {
+      draftBtn.disabled = true;
+      warningEl.classList.add("show");
+      warningEl.textContent = "⚠ Diese Quelle liefert nur einen Teaser (Paywall) – bitte zuerst Volltext einfügen, bevor du einen Artikel entwerfen kannst.";
+    } else {
+      draftBtn.disabled = false;
+      warningEl.classList.remove("show");
+      warningEl.textContent = "";
+    }
+  }
+
+  async function toggleFulltextBox(item, fulltextBox, fulltextBtn, draftBtn, warningEl) {
     if (fulltextBox.classList.contains("open")) {
       fulltextBox.classList.remove("open");
       fulltextBox.innerHTML = "";
@@ -605,6 +634,7 @@
       });
       item.manual_fulltext = text;
       fulltextBtn.textContent = text ? "Volltext bearbeiten" : "Volltext einfügen";
+      applyFulltextGate(item, draftBtn, warningEl);
       saveBtn.disabled = false;
       saveBtn.textContent = "Gespeichert!";
       setTimeout(() => {
@@ -622,6 +652,7 @@
         });
         item.manual_fulltext = "";
         fulltextBtn.textContent = "Volltext einfügen";
+        applyFulltextGate(item, draftBtn, warningEl);
         fulltextBox.classList.remove("open");
         fulltextBox.innerHTML = "";
       });
@@ -641,6 +672,7 @@
         <div class="byline">${formatDate(item.published_at || item.fetched_at)}</div>
         <p class="summary">${item.summary || ""}</p>
         <div class="actions"></div>
+        <div class="fulltext-warning"></div>
         <div class="fulltext"></div>
         <div class="draft"></div>
       </div>
@@ -657,6 +689,7 @@
     const actions = div.querySelector(".actions");
     const draftBox = div.querySelector(".draft");
     const fulltextBox = div.querySelector(".fulltext");
+    const fulltextWarning = div.querySelector(".fulltext-warning");
 
     const draftBtn = document.createElement("button");
     draftBtn.className = "primary";
@@ -666,8 +699,10 @@
 
     const fulltextBtn = document.createElement("button");
     fulltextBtn.textContent = item.manual_fulltext ? "Volltext bearbeiten" : "Volltext einfügen";
-    fulltextBtn.addEventListener("click", () => toggleFulltextBox(item, fulltextBox, fulltextBtn));
+    fulltextBtn.addEventListener("click", () => toggleFulltextBox(item, fulltextBox, fulltextBtn, draftBtn, fulltextWarning));
     actions.appendChild(fulltextBtn);
+
+    applyFulltextGate(item, draftBtn, fulltextWarning);
 
     const buttons = [
       ["interessant", "Interessant"],
@@ -707,8 +742,10 @@
     items.forEach((item) => listEl.appendChild(renderItem(item)));
   }
 
-  loadSources();
-  loadItems();
+  (async () => {
+    await loadSources();
+    await loadItems();
+  })();
 </script>
 
 </body>
