@@ -53,6 +53,14 @@ const SOURCES: FeedSource[] = [
 // übernehmen. Läuft der Cron alle 15 Min, reicht ein moderater Puffer.
 const GEMEINDERAT_MAX_AGE_DAYS = 45;
 
+// Baugesuche Kanton Zürich via die offene Amtsblattportal-API (kein Login
+// nötig für publizierte Meldungen). Rubrik "BP" = Baupublikationen. Die
+// Bulk-CSV-Liste enthält nur Metadaten (Datum, ID, Nummer) - der eigentliche
+// Baubeschrieb steckt nur im signierten PDF pro Publikation, das wir hier
+// bewusst nicht auslesen (siehe Absprache: keine PDF-Textextraktion vorerst).
+const BAUGESUCHE_SOURCE = { key: "baugesuche-zh", label: "Baugesuche Kanton Zürich" };
+const BAUGESUCHE_MAX_AGE_DAYS = 30;
+
 // Baugesuche Kanton Zürich (opendata.swiss) sind als GPKG (Geopackage)
 // publiziert, kein einfaches RSS/CSV. Das lohnt sich als eigener zweiter
 // Schritt (Parsing via Python/GDAL oder Prüfung ob ein CSV/GeoJSON-Resource
@@ -91,9 +99,11 @@ Du lieferst drei Teile:
   und liefert die Details. Am Schluss falls sinnvoll ein Satz Einordnung
   (was folgt daraus, was ist offen).
 
-Antworte AUSSCHLIESSLICH mit einem JSON-Objekt in diesem Format, ohne
-Markdown-Codeblock, ohne Erklärungen davor oder danach:
-{"title": "...", "lead": "...", "body": "..."}
+Antworte AUSSCHLIESSLICH mit einem gültigen JSON-Objekt in diesem Format,
+ohne Markdown-Codeblock, ohne Erklärungen davor oder danach. Absätze im
+body als "\\n\\n" (JSON-Escape-Sequenz), NIEMALS als echten Zeilenumbruch,
+sonst ist das JSON ungültig:
+{"title": "...", "lead": "...", "body": "Absatz eins.\\n\\nAbsatz zwei."}
 `.trim();
 
 export default {
@@ -133,7 +143,99 @@ async function runFetchCycle(env: Env): Promise<{ source: string; count: number;
       results.push({ source: source.key, count: 0, error: String(err?.message ?? err) });
     }
   }
+
+  // Baugesuche ist keine RSS-Quelle, separat behandelt.
+  try {
+    const items = await fetchBaugesuche();
+    await upsertItems(env, items);
+    results.push({ source: BAUGESUCHE_SOURCE.key, count: items.length });
+  } catch (err: any) {
+    results.push({ source: BAUGESUCHE_SOURCE.key, count: 0, error: String(err?.message ?? err) });
+  }
+
   return results;
+}
+
+async function fetchBaugesuche(): Promise<NewsItem[]> {
+  const cutoff = new Date(Date.now() - BAUGESUCHE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
+  const cutoffStr = cutoff.toISOString().slice(0, 10); // YYYY-MM-DD
+  const url =
+    `https://amtsblattportal.ch/api/v1/publications/csv?publicationStates=PUBLISHED` +
+    `&rubrics=BP&cantons=ZH&publicationDate.start=${cutoffStr}` +
+    `&pageRequest.sortOrders=column:PUBLICATION_DATE|direction:DESC&pageRequest.size=100`;
+
+  const res = await fetch(url, { headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" } });
+  if (!res.ok) throw new Error(`Amtsblattportal API ${res.status}`);
+  const csvText = await res.text();
+  return parseBaugesucheCsv(csvText);
+}
+
+// CSV-Parser, der sich anhand der Kopfzeile orientiert statt fixe
+// Spaltenpositionen anzunehmen - robuster gegen Schema-Änderungen der API.
+function parseBaugesucheCsv(csv: string): NewsItem[] {
+  const lines = csv.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return [];
+
+  const delimiter = lines[0].includes(";") && !lines[0].includes(",") ? ";" : ",";
+  const headers = splitCsvLine(lines[0], delimiter).map((h) => h.trim().toLowerCase());
+
+  const idIdx = headers.indexOf("id");
+  const dateIdx = headers.findIndex((h) => h.includes("publicationdate"));
+  const numberIdx = headers.findIndex((h) => h.includes("publicationnumber"));
+  const officeIdx = headers.findIndex((h) => h.includes("registrationoffice") && h.includes("displayname"));
+  const townIdx = headers.findIndex((h) => h.includes("town") || h.includes("municipality"));
+
+  if (idIdx < 0) return []; // Unerwartetes CSV-Format - lieber nichts als Falsches liefern
+
+  const items: NewsItem[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = splitCsvLine(lines[i], delimiter);
+    const id = cols[idIdx]?.trim();
+    if (!id) continue;
+
+    const dateRaw = dateIdx >= 0 ? cols[dateIdx]?.trim() : "";
+    const publishedAt = dateRaw ? safeDate(dateRaw) ?? parseSwissDate(dateRaw) : null;
+    const town = townIdx >= 0 ? cols[townIdx]?.trim() : "";
+    const office = officeIdx >= 0 ? cols[officeIdx]?.trim() : "";
+    const publicationNumber = numberIdx >= 0 ? cols[numberIdx]?.trim() : id.slice(0, 8);
+    const location = town || office || "Kanton Zürich";
+
+    items.push({
+      id: `${BAUGESUCHE_SOURCE.key}::${id}`.slice(0, 500),
+      source: BAUGESUCHE_SOURCE.key,
+      source_label: BAUGESUCHE_SOURCE.label,
+      title: `Baugesuch publiziert – ${location} (Nr. ${publicationNumber})`,
+      link: `https://amtsblattportal.ch/api/v1/publications/${id}/pdf`,
+      summary: "Details (Baubeschrieb, Adresse, Auflagefrist) nur im signierten PDF verfügbar.",
+      published_at: publishedAt,
+    });
+  }
+  return items;
+}
+
+// Sehr simpler CSV-Zeilen-Splitter mit Unterstützung für gequotete Felder.
+function splitCsvLine(line: string, delimiter: string): string[] {
+  const result: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === delimiter && !inQuotes) {
+      result.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  result.push(cur);
+  return result;
 }
 
 async function upsertItems(env: Env, items: NewsItem[]) {
@@ -348,15 +450,29 @@ function parseDraftJson(raw: string): DraftResult {
     cleaned = cleaned.replace(/^```(json)?\s*/i, "").replace(/```\s*$/, "").trim();
   }
   try {
-    const parsed = JSON.parse(cleaned);
-    return {
-      title: String(parsed.title ?? "").trim(),
-      lead: String(parsed.lead ?? "").trim(),
-      body: String(parsed.body ?? "").trim(),
-    };
+    return finishParse(cleaned);
   } catch {
-    return { title: "", lead: "", body: raw };
+    // Häufigste Fehlerursache: Claude setzt bei mehreren Absätzen echte
+    // Zeilenumbrüche statt der JSON-Escape-Sequenz "\n" in die Strings -
+    // das bricht JSON.parse. Reparieren, indem verbleibende rohe
+    // Zeilenumbrüche zur Escape-Sequenz umgewandelt werden, dann erneut
+    // versuchen.
+    try {
+      const repaired = cleaned.replace(/\r\n|\r|\n/g, "\\n");
+      return finishParse(repaired);
+    } catch {
+      return { title: "", lead: "", body: raw };
+    }
   }
+}
+
+function finishParse(jsonText: string): DraftResult {
+  const parsed = JSON.parse(jsonText);
+  return {
+    title: String(parsed.title ?? "").trim(),
+    lead: String(parsed.lead ?? "").trim(),
+    body: String(parsed.body ?? "").trim(),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +522,8 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   const headers = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8" };
 
   if (url.pathname === "/api/sources" && request.method === "GET") {
-    return new Response(JSON.stringify(SOURCES.map((s) => ({ key: s.key, label: s.label }))), { headers });
+    const all = [...SOURCES.map((s) => ({ key: s.key, label: s.label })), BAUGESUCHE_SOURCE];
+    return new Response(JSON.stringify(all), { headers });
   }
 
   if (url.pathname === "/api/check-embeddable" && request.method === "GET") {
