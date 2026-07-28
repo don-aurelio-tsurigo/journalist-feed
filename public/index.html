@@ -199,6 +199,20 @@
     gap: 10px;
     flex-wrap: wrap;
   }
+  .draft .draft-meta-actions { display: flex; gap: 8px; }
+  .draft .copy-btn {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 5px 10px;
+    border: 2px solid var(--blue);
+    background: var(--paper);
+    color: var(--blue-deep);
+    cursor: pointer;
+  }
+  .draft .copy-btn:hover { background: var(--blue); color: white; }
+  .draft .copy-btn:disabled { opacity: 0.7; cursor: default; }
   .draft .discard-btn {
     font-size: 11px;
     font-weight: 700;
@@ -243,69 +257,6 @@
     font-size: 14px;
     font-weight: 600;
   }
-
-  .modal-backdrop {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(13,13,13,0.6);
-    z-index: 100;
-    padding: 30px 20px;
-  }
-  .modal-backdrop.open { display: flex; align-items: flex-start; justify-content: center; }
-  .modal {
-    background: var(--paper);
-    width: 100%;
-    max-width: 900px;
-    max-height: calc(100vh - 60px);
-    display: flex;
-    flex-direction: column;
-    border: 3px solid var(--ink);
-  }
-  .modal-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 14px;
-    border-bottom: 3px solid var(--ink);
-    background: var(--blue-tint);
-  }
-  .modal-bar .modal-title {
-    font-size: 13px;
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .modal-bar-actions { display: flex; gap: 8px; flex-shrink: 0; }
-  .modal-bar-actions a, .modal-bar-actions button {
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-    padding: 6px 12px;
-    border: 2px solid var(--ink);
-    background: var(--paper);
-    color: var(--ink);
-    text-decoration: none;
-    cursor: pointer;
-  }
-  .modal-bar-actions a:hover, .modal-bar-actions button:hover { background: var(--ink); color: white; }
-  .modal iframe {
-    flex: 1;
-    width: 100%;
-    border: none;
-    min-height: 60vh;
-    background: white;
-  }
-  .modal .iframe-fallback {
-    display: none;
-    padding: 30px;
-    font-size: 14px;
-    color: var(--ink-soft);
-  }
-  .modal .iframe-fallback.show { display: block; }
 </style>
 </head>
 <body>
@@ -332,23 +283,6 @@
   <div id="list"></div>
 </main>
 
-<div class="modal-backdrop" id="modalBackdrop">
-  <div class="modal">
-    <div class="modal-bar">
-      <span class="modal-title" id="modalTitle"></span>
-      <div class="modal-bar-actions">
-        <a id="modalOpenNewTab" href="#" target="_blank" rel="noopener">Neuer Tab</a>
-        <button id="modalClose">Schliessen</button>
-      </div>
-    </div>
-    <iframe id="modalFrame"></iframe>
-    <div class="iframe-fallback" id="modalFallback">
-      Diese Seite lässt sich nicht eingebettet anzeigen (blockiert das per Sicherheits-Header).
-      Bitte über "Neuer Tab" öffnen.
-    </div>
-  </div>
-</div>
-
 <script>
   let currentStatus = "neu";
   let currentSource = "";
@@ -357,52 +291,6 @@
   const sourceTabsEl = document.getElementById("sourceTabs");
   const listEl = document.getElementById("list");
   const refreshBtn = document.getElementById("refreshBtn");
-
-  const modalBackdrop = document.getElementById("modalBackdrop");
-  const modalFrame = document.getElementById("modalFrame");
-  const modalTitle = document.getElementById("modalTitle");
-  const modalOpenNewTab = document.getElementById("modalOpenNewTab");
-  const modalClose = document.getElementById("modalClose");
-  const modalFallback = document.getElementById("modalFallback");
-  let fallbackTimer = null;
-
-  function openModal(link, title) {
-    modalTitle.textContent = title;
-    modalOpenNewTab.href = link;
-    modalFallback.classList.remove("show");
-    modalFrame.style.display = "block";
-    modalFrame.src = link;
-    modalBackdrop.classList.add("open");
-    document.body.style.overflow = "hidden";
-
-    // Manche Seiten blockieren das Einbetten per X-Frame-Options/CSP. Der
-    // Browser meldet das nicht direkt an uns - Heuristik: wenn nach kurzer
-    // Zeit kein "load" ausgelöst wurde, zeigen wir den Fallback-Hinweis.
-    let loaded = false;
-    modalFrame.onload = () => { loaded = true; };
-    clearTimeout(fallbackTimer);
-    fallbackTimer = setTimeout(() => {
-      if (!loaded) {
-        modalFrame.style.display = "none";
-        modalFallback.classList.add("show");
-      }
-    }, 3500);
-  }
-
-  function closeModal() {
-    modalBackdrop.classList.remove("open");
-    modalFrame.src = "about:blank";
-    document.body.style.overflow = "";
-    clearTimeout(fallbackTimer);
-  }
-
-  modalClose.addEventListener("click", closeModal);
-  modalBackdrop.addEventListener("click", (e) => {
-    if (e.target === modalBackdrop) closeModal();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && modalBackdrop.classList.contains("open")) closeModal();
-  });
 
   tabsEl.addEventListener("click", (e) => {
     const tab = e.target.closest(".tab");
@@ -500,9 +388,42 @@
       <textarea>${body || ""}</textarea>
       <div class="draft-meta">
         <span>Entwurf erzeugt ${formatDate(generatedAt)} · vor dem Publizieren gegenlesen</span>
-        <button class="discard-btn" type="button">Entwurf verwerfen</button>
+        <div class="draft-meta-actions">
+          <button class="copy-btn" type="button">Kopieren</button>
+          <button class="discard-btn" type="button">Entwurf verwerfen</button>
+        </div>
       </div>
     `;
+    const titleInput = draftBox.querySelector('input[type="text"]');
+    const leadTextarea = draftBox.querySelector("textarea.lead");
+    const bodyTextarea = draftBox.querySelector("textarea:not(.lead)");
+    const copyBtn = draftBox.querySelector(".copy-btn");
+
+    copyBtn.addEventListener("click", async () => {
+      // Liest die aktuellen (ggf. vom Nutzer editierten) Feldwerte, nicht
+      // die ursprünglich generierten - falls vor dem Kopieren was angepasst wurde.
+      const parts = [titleInput.value, leadTextarea.value, bodyTextarea.value].filter((p) => p.trim());
+      const combined = parts.join("\n\n");
+      try {
+        await navigator.clipboard.writeText(combined);
+      } catch {
+        // Fallback für Browser/Kontexte ohne Clipboard-API-Zugriff.
+        const tmp = document.createElement("textarea");
+        tmp.value = combined;
+        document.body.appendChild(tmp);
+        tmp.select();
+        document.execCommand("copy");
+        document.body.removeChild(tmp);
+      }
+      const original = copyBtn.textContent;
+      copyBtn.textContent = "Kopiert!";
+      copyBtn.disabled = true;
+      setTimeout(() => {
+        copyBtn.textContent = original;
+        copyBtn.disabled = false;
+      }, 1500);
+    });
+
     draftBox.querySelector(".discard-btn").addEventListener("click", () => discardDraft(id, draftBtn, draftBox));
   }
 
@@ -512,33 +433,13 @@
     div.innerHTML = `
       <div class="item-inner">
         <span class="tag">${item.source_label}</span>
-        <h2><a href="${item.link}" data-open-modal>${item.title}</a></h2>
+        <h2><a href="${item.link}" target="_blank" rel="noopener">${item.title}</a></h2>
         <div class="byline">${formatDate(item.published_at || item.fetched_at)}</div>
         <p class="summary">${item.summary || ""}</p>
         <div class="actions"></div>
         <div class="draft"></div>
       </div>
     `;
-    const titleLink = div.querySelector("h2 a");
-    titleLink.addEventListener("click", async (e) => {
-      e.preventDefault();
-      titleLink.style.opacity = "0.6";
-      try {
-        const res = await fetch(`/api/check-embeddable?url=${encodeURIComponent(item.link)}`);
-        const data = await res.json();
-        if (data.embeddable === false) {
-          window.open(item.link, "_blank", "noopener");
-        } else {
-          openModal(item.link, item.title);
-        }
-      } catch {
-        // Check selbst fehlgeschlagen -> im Zweifel Modal versuchen,
-        // der Zeit-Fallback im Modal greift dann als zweite Absicherung.
-        openModal(item.link, item.title);
-      } finally {
-        titleLink.style.opacity = "";
-      }
-    });
 
     const actions = div.querySelector(".actions");
     const draftBox = div.querySelector(".draft");
