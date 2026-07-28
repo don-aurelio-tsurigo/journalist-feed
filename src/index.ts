@@ -597,11 +597,15 @@ interface DraftResult {
 }
 
 async function generateDraft(env: Env, item: any): Promise<DraftResult> {
+  // Priorität: manuell eingefügter Volltext (z.B. hinter einer Paywall
+  // manuell kopiert) > automatisch gefetchter Volltext > Summary > Titel.
   // Bei Baugesuche ist der Link ein PDF, kein HTML - fetchFullText würde
   // dort nur Binär-Kauderwelsch liefern. Die Summary enthält hier bereits
   // die echte Projektbeschreibung aus der Einzel-Publikations-XML, die
   // reicht als Quelle.
-  const fullText = item.source === "baugesuche-zh" ? "" : await fetchFullText(item.link);
+  const manualText = typeof item.manual_fulltext === "string" ? item.manual_fulltext.trim() : "";
+  const fullText =
+    manualText || (item.source === "baugesuche-zh" ? "" : await fetchFullText(item.link));
   const sourceText = fullText || item.summary || item.title;
 
   const userPrompt = `Quelle: ${item.source_label}
@@ -739,6 +743,17 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       await env.DB.batch(chunk.map((id) => stmt.bind(body.status, id)));
     }
     return new Response(JSON.stringify({ ok: true, updated: ids.length }), { headers });
+  }
+
+  const fulltextMatch = url.pathname.match(/^\/api\/items\/(.+)\/fulltext$/);
+  if (fulltextMatch && request.method === "POST") {
+    const id = decodeURIComponent(fulltextMatch[1]);
+    const body = (await request.json()) as { text?: string };
+    const text = typeof body.text === "string" ? body.text : "";
+    await env.DB.prepare("UPDATE news_items SET manual_fulltext = ? WHERE id = ?")
+      .bind(text || null, id)
+      .run();
+    return new Response(JSON.stringify({ ok: true }), { headers });
   }
 
   const draftDiscardMatch = url.pathname.match(/^\/api\/items\/(.+)\/draft\/discard$/);
