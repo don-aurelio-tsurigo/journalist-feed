@@ -45,7 +45,25 @@ const SOURCES: FeedSource[] = [
     label: "Gemeinderat Zürich",
     url: "https://www.gemeinderat-zuerich.ch/de/geschaefte/export.php?export=rss",
   },
+  {
+    key: "tagesanzeiger-zuerich",
+    label: "Tages-Anzeiger Zürich",
+    url: "https://partner-feeds.publishing.tamedia.ch/rss/tagesanzeiger/zuerich",
+  },
+  {
+    key: "20min-zuerich",
+    label: "20 Minuten Zürich",
+    url: "https://partner-feeds.20min.ch/rss/20minuten/regionen/zuerich",
+  },
 ];
+
+// Tagblatt der Stadt Zürich hat kein RSS - wird per HTML-Scraping der
+// Übersichtsseite geholt. Kein robots.txt-Verbot, keine Paywall. Die
+// Extraktion ist heuristisch (Regex auf Anker-Links zur Detailseite,
+// gruppiert nach News-ID), da uns die exakte HTML-Struktur nicht aus
+// erster Hand vorliegt - ggf. nach dem ersten Testlauf nachjustieren.
+const TAGBLATT_SOURCE = { key: "tagblatt-zuerich", label: "Tagblatt der Stadt Zürich" };
+const TAGBLATT_URL = "https://www.tagblattzuerich.ch/zuerich";
 
 // Der Gemeinderat-Feed ist komplett ungefiltert (geht Jahre zurück, tausende
 // Einträge). Ohne Cutoff würde ein einzelner Sync-Durchlauf zu lange dauern
@@ -157,7 +175,80 @@ async function runFetchCycle(env: Env): Promise<{ source: string; count: number;
     results.push({ source: BAUGESUCHE_SOURCE.key, count: 0, error: String(err?.message ?? err) });
   }
 
+  // Tagblatt der Stadt Zürich: HTML-Scraping statt RSS.
+  try {
+    const items = await fetchTagblatt();
+    await upsertItems(env, items);
+    results.push({ source: TAGBLATT_SOURCE.key, count: items.length });
+  } catch (err: any) {
+    results.push({ source: TAGBLATT_SOURCE.key, count: 0, error: String(err?.message ?? err) });
+  }
+
   return results;
+}
+
+async function fetchTagblatt(): Promise<NewsItem[]> {
+  const res = await fetch(TAGBLATT_URL, { headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" } });
+  if (!res.ok) throw new Error(`Tagblatt HTTP ${res.status}`);
+  const html = await res.text();
+  return parseTagblattHtml(html);
+}
+
+// Heuristischer Scraper: TYPO3-News-Detaillinks enthalten alle das Muster
+// "tx_news_pi1[action]=detail...[news]=<ID>". Jede News-ID taucht mehrfach
+// auf (Bild-Link, Titel-Link, "Weiterlesen"-Link) - wir sammeln pro ID alle
+// Anker-Texte und wählen den kürzesten sinnvollen als Titel (Schlagzeile)
+// und den längsten als Teaser/Summary. Datum wird best-effort per
+// Positions-Zuordnung ("Aktuell TT.MM.JJJJ - HH:MM") zugewiesen.
+function parseTagblattHtml(html: string): NewsItem[] {
+  const linkRegex =
+    /<a\b[^>]*href="([^"]*tx_news_pi1%5Baction%5D=detail[^"]*news%5D=(\d+)[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+  const byId = new Map<string, { url: string; texts: string[] }>();
+  let match: RegExpExecArray | null;
+
+  while ((match = linkRegex.exec(html)) !== null) {
+    const rawUrl = match[1];
+    const id = match[2];
+    const text = clean(match[3].replace(/<[^>]+>/g, " "));
+    const url = decodeEntities(rawUrl);
+    if (!byId.has(id)) byId.set(id, { url, texts: [] });
+    if (text) byId.get(id)!.texts.push(text);
+  }
+
+  // Datumsangaben in Dokumentreihenfolge einsammeln, um sie später
+  // positionsbasiert den Artikeln zuzuordnen (best effort).
+  const dateMatches = [...html.matchAll(/(\d{2})\.(\d{2})\.(\d{4})\s*-\s*(\d{2}):(\d{2})/g)];
+  const orderedIds = [...byId.keys()]; // Map bewahrt Einfügereihenfolge = Dokumentreihenfolge
+  const datesById = new Map<string, string>();
+  if (dateMatches.length === orderedIds.length) {
+    orderedIds.forEach((id, i) => {
+      const [, day, month, year, hour, minute] = dateMatches[i];
+      const d = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
+      if (!isNaN(d.getTime())) datesById.set(id, d.toISOString());
+    });
+  }
+
+  const items: NewsItem[] = [];
+  for (const [id, { url, texts }] of byId) {
+    const candidates = [...new Set(texts)].filter(
+      (t) => t.toLowerCase() !== "weiterlesen" && t.length > 2
+    );
+    if (candidates.length === 0) continue;
+    const sorted = [...candidates].sort((a, b) => a.length - b.length);
+    const title = sorted[0];
+    const summary = sorted[sorted.length - 1] === title ? "" : sorted[sorted.length - 1];
+
+    items.push({
+      id: `${TAGBLATT_SOURCE.key}::${id}`,
+      source: TAGBLATT_SOURCE.key,
+      source_label: TAGBLATT_SOURCE.label,
+      title,
+      link: url,
+      summary: summary.slice(0, 600),
+      published_at: datesById.get(id) ?? null,
+    });
+  }
+  return items;
 }
 
 async function fetchBaugesuche(): Promise<NewsItem[]> {
@@ -606,7 +697,7 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   const headers = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8" };
 
   if (url.pathname === "/api/sources" && request.method === "GET") {
-    const all = [...SOURCES.map((s) => ({ key: s.key, label: s.label })), BAUGESUCHE_SOURCE];
+    const all = [...SOURCES.map((s) => ({ key: s.key, label: s.label })), BAUGESUCHE_SOURCE, TAGBLATT_SOURCE];
     return new Response(JSON.stringify(all), { headers });
   }
 
