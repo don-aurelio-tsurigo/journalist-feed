@@ -72,9 +72,10 @@
   .tabs {
     display: flex;
     gap: 4px;
-    margin-bottom: 22px;
+    margin-bottom: 12px;
     flex-wrap: wrap;
   }
+  .tabs.sources { margin-bottom: 22px; }
   .tab {
     padding: 8px 16px;
     font-size: 13px;
@@ -92,6 +93,18 @@
     color: white;
   }
   .tab:not(.active):hover { background: var(--blue-tint); }
+  .tabs.sources .tab {
+    border-color: var(--blue);
+    color: var(--blue-deep);
+    font-size: 11px;
+    padding: 6px 12px;
+  }
+  .tabs.sources .tab.active {
+    background: var(--blue);
+    border-color: var(--blue);
+    color: white;
+  }
+  .tabs.sources .tab:not(.active):hover { background: var(--blue-tint); }
 
   .item {
     background: var(--blue-tint);
@@ -296,6 +309,9 @@
     <div class="tab" data-status="verworfen">Verworfen</div>
     <div class="tab" data-status="">Alle</div>
   </div>
+  <div class="tabs sources" id="sourceTabs">
+    <div class="tab active" data-source="">Alle Quellen</div>
+  </div>
   <div id="list"></div>
 </main>
 
@@ -318,8 +334,10 @@
 
 <script>
   let currentStatus = "neu";
+  let currentSource = "";
 
   const tabsEl = document.getElementById("tabs");
+  const sourceTabsEl = document.getElementById("sourceTabs");
   const listEl = document.getElementById("list");
   const refreshBtn = document.getElementById("refreshBtn");
 
@@ -340,6 +358,9 @@
     modalBackdrop.classList.add("open");
     document.body.style.overflow = "hidden";
 
+    // Manche Seiten blockieren das Einbetten per X-Frame-Options/CSP. Der
+    // Browser meldet das nicht direkt an uns - Heuristik: wenn nach kurzer
+    // Zeit kein "load" ausgelöst wurde, zeigen wir den Fallback-Hinweis.
     let loaded = false;
     modalFrame.onload = () => { loaded = true; };
     clearTimeout(fallbackTimer);
@@ -369,11 +390,36 @@
   tabsEl.addEventListener("click", (e) => {
     const tab = e.target.closest(".tab");
     if (!tab) return;
-    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+    document.querySelectorAll("#tabs .tab").forEach((t) => t.classList.remove("active"));
     tab.classList.add("active");
     currentStatus = tab.dataset.status;
     loadItems();
   });
+
+  sourceTabsEl.addEventListener("click", (e) => {
+    const tab = e.target.closest(".tab");
+    if (!tab) return;
+    document.querySelectorAll("#sourceTabs .tab").forEach((t) => t.classList.remove("active"));
+    tab.classList.add("active");
+    currentSource = tab.dataset.source;
+    loadItems();
+  });
+
+  async function loadSources() {
+    try {
+      const res = await fetch("/api/sources");
+      const sources = await res.json();
+      sources.forEach((s) => {
+        const tab = document.createElement("div");
+        tab.className = "tab";
+        tab.dataset.source = s.key;
+        tab.textContent = s.label;
+        sourceTabsEl.appendChild(tab);
+      });
+    } catch {
+      // Quellen-Filter ist ein Nice-to-have - bei Fehler bleibt einfach nur "Alle Quellen" stehen.
+    }
+  }
 
   refreshBtn.addEventListener("click", async () => {
     refreshBtn.disabled = true;
@@ -458,6 +504,8 @@
           openModal(item.link, item.title);
         }
       } catch {
+        // Check selbst fehlgeschlagen -> im Zweifel Modal versuchen,
+        // der Zeit-Fallback im Modal greift dann als zweite Absicherung.
         openModal(item.link, item.title);
       } finally {
         titleLink.style.opacity = "";
@@ -497,6 +545,7 @@
   async function loadItems() {
     const params = new URLSearchParams();
     if (currentStatus) params.set("status", currentStatus);
+    if (currentSource) params.set("source", currentSource);
     params.set("limit", "100");
     const res = await fetch(`/api/items?${params}`);
     const items = await res.json();
@@ -508,6 +557,7 @@
     items.forEach((item) => listEl.appendChild(renderItem(item)));
   }
 
+  loadSources();
   loadItems();
 </script>
 
