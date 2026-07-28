@@ -193,7 +193,24 @@
     font-weight: 600;
     color: var(--ink-soft);
     margin-top: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
   }
+  .draft .discard-btn {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 5px 10px;
+    border: 2px solid var(--warn);
+    background: var(--paper);
+    color: var(--warn);
+    cursor: pointer;
+  }
+  .draft .discard-btn:hover { background: var(--warn); color: white; }
   .draft label {
     display: block;
     font-size: 11px;
@@ -459,14 +476,21 @@
         draftBox.innerHTML = `<p style="color:var(--warn); font-weight:600;">Fehler: ${data.error || "unbekannt"}</p>`;
         return;
       }
-      renderDraftBox(draftBox, data.draft_title, data.draft_lead, data.draft_text, data.draft_generated_at);
+      renderDraftBox(draftBox, data.draft_title, data.draft_lead, data.draft_text, data.draft_generated_at, id, button);
     } finally {
       button.disabled = false;
       button.textContent = original;
     }
   }
 
-  function renderDraftBox(draftBox, title, lead, body, generatedAt) {
+  async function discardDraft(id, draftBtn, draftBox) {
+    if (!confirm("Entwurf wirklich verwerfen?")) return;
+    await fetch(`/api/items/${encodeURIComponent(id)}/draft/discard`, { method: "POST" });
+    draftBox.innerHTML = "";
+    draftBtn.textContent = "Artikel entwerfen";
+  }
+
+  function renderDraftBox(draftBox, title, lead, body, generatedAt, id, draftBtn) {
     draftBox.innerHTML = `
       <label>Titel</label>
       <input type="text" value="${(title || "").replace(/"/g, "&quot;")}" />
@@ -474,8 +498,12 @@
       <textarea class="lead">${lead || ""}</textarea>
       <label>Text</label>
       <textarea>${body || ""}</textarea>
-      <div class="draft-meta">Entwurf erzeugt ${formatDate(generatedAt)} · vor dem Publizieren gegenlesen</div>
+      <div class="draft-meta">
+        <span>Entwurf erzeugt ${formatDate(generatedAt)} · vor dem Publizieren gegenlesen</span>
+        <button class="discard-btn" type="button">Entwurf verwerfen</button>
+      </div>
     `;
+    draftBox.querySelector(".discard-btn").addEventListener("click", () => discardDraft(id, draftBtn, draftBox));
   }
 
   function renderItem(item) {
@@ -536,7 +564,7 @@
     });
 
     if (item.draft_text) {
-      renderDraftBox(draftBox, item.draft_title, item.draft_lead, item.draft_text, item.draft_generated_at);
+      renderDraftBox(draftBox, item.draft_title, item.draft_lead, item.draft_text, item.draft_generated_at, item.id, draftBtn);
     }
 
     return div;
