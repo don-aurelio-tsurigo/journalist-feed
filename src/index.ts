@@ -652,6 +652,17 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     return new Response(JSON.stringify({ ok: true }), { headers });
   }
 
+  const draftDiscardMatch = url.pathname.match(/^\/api\/items\/(.+)\/draft\/discard$/);
+  if (draftDiscardMatch && request.method === "POST") {
+    const id = decodeURIComponent(draftDiscardMatch[1]);
+    await env.DB.prepare(
+      "UPDATE news_items SET draft_title = NULL, draft_lead = NULL, draft_text = NULL, draft_generated_at = NULL WHERE id = ?"
+    )
+      .bind(id)
+      .run();
+    return new Response(JSON.stringify({ ok: true }), { headers });
+  }
+
   const draftMatch = url.pathname.match(/^\/api\/items\/(.+)\/draft$/);
   if (draftMatch && request.method === "POST") {
     const id = decodeURIComponent(draftMatch[1]);
