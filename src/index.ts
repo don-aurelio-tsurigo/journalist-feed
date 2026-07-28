@@ -182,10 +182,34 @@ async function runFetchCycle(env: Env): Promise<{ source: string; count: number;
   return results;
 }
 
-async function fetchTagblatt(): Promise<NewsItem[]> {  const res = await fetch(TAGBLATT_URL, { headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" } });
+async function fetchTagblatt(): Promise<NewsItem[]> {
+  const res = await fetch(TAGBLATT_URL, { headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" } });
   if (!res.ok) throw new Error(`Tagblatt HTTP ${res.status}`);
   const html = await res.text();
-  return parseTagblattHtml(html);
+  const basics = parseTagblattOverview(html);
+
+  // Für jeden Artikel die Detailseite einzeln holen - dort steht das echte
+  // Publikationsdatum sauber in <span class="timestamp">, plus Titel (h1)
+  // und Lead (.vorspann). Deutlich zuverlässiger als jede Heuristik auf der
+  // Übersichtsseite. Gleiches Prinzip wie bei den Baugesuchen.
+  const enriched = await Promise.all(
+    basics.map(async ({ id, url }) => {
+      const detail = await fetchTagblattDetail(url);
+      if (!detail || !detail.title) return null;
+      const item: NewsItem = {
+        id: `${TAGBLATT_SOURCE.key}::${id}`,
+        source: TAGBLATT_SOURCE.key,
+        source_label: TAGBLATT_SOURCE.label,
+        title: detail.title,
+        link: url,
+        summary: detail.summary,
+        published_at: detail.publishedAt,
+      };
+      return item;
+    })
+  );
+
+  return enriched.filter((item): item is NewsItem => item !== null);
 }
 
 // Löst relative Pfade (z.B. "/zuerich/aktuell?...") zu absoluten URLs auf
@@ -200,85 +224,57 @@ function resolveTagblattUrl(raw: string): string {
   return `https://www.tagblattzuerich.ch${path}`;
 }
 
-// Heuristischer Scraper: TYPO3-News-Detaillinks enthalten alle das Muster
-// "tx_news_pi1[action]=detail...[news]=<ID>". Jede News-ID taucht mehrfach
-// auf (Bild-Link, Titel-Link, "Weiterlesen"-Link) - wir sammeln pro ID alle
-// Anker-Texte und wählen den kürzesten sinnvollen als Titel (Schlagzeile)
-// und den längsten als Teaser/Summary. Datum wird per Zeiger-Zuordnung
-// gefunden: für jeden Artikel (sortiert nach Position seines letzten Links
-// im Dokument) wird das nächste noch unverbrauchte Datum danach genommen -
-// robuster als eine strikte 1:1-Zählung, die schon bei einem einzigen
-// zusätzlichen/fehlenden Datumstreffer im ganzen Dokument komplett versagt.
-function parseTagblattHtml(html: string): NewsItem[] {
+// Sammelt aus der Übersichtsseite nur die eindeutigen Artikel-IDs + Links
+// ein (dedupliziert, da jede ID mehrfach verlinkt ist: Bild, Titel,
+// "Weiterlesen"). Titel/Datum kommen NICHT von hier, sondern aus der
+// jeweiligen Detailseite (siehe fetchTagblattDetail).
+function parseTagblattOverview(html: string): { id: string; url: string }[] {
   const linkRegex =
-    /<a\b[^>]*href="([^"]*tx_news_pi1%5Baction%5D=detail[^"]*news%5D=(\d+)[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
-  const byId = new Map<string, { url: string; texts: string[]; lastEnd: number }>();
+    /<a\b[^>]*href="([^"]*tx_news_pi1%5Baction%5D=detail[^"]*news%5D=(\d+)[^"]*)"[^>]*>/gi;
+  const byId = new Map<string, string>();
   let match: RegExpExecArray | null;
 
   while ((match = linkRegex.exec(html)) !== null) {
-    const rawUrl = match[1];
     const id = match[2];
-    const text = clean(match[3].replace(/<[^>]+>/g, " "));
-    const url = resolveTagblattUrl(decodeEntities(rawUrl));
-    const end = match.index + match[0].length;
-    if (!byId.has(id)) byId.set(id, { url, texts: [], lastEnd: end });
-    const entry = byId.get(id)!;
-    if (text) entry.texts.push(text);
-    entry.lastEnd = Math.max(entry.lastEnd, end);
-  }
-
-  // Alle Datumsangaben im Dokument mit ihrer Position einsammeln.
-  const dateMatches = [...html.matchAll(/(\d{2})\.(\d{2})\.(\d{4})\s*-\s*(\d{2}):(\d{2})/g)].map((m) => ({
-    index: m.index ?? 0,
-    iso: (() => {
-      const [, day, month, year, hour, minute] = m;
-      const d = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
-      return isNaN(d.getTime()) ? null : d.toISOString();
-    })(),
-  }));
-
-  // Artikel nach Position ihres letzten Links sortieren (= Dokumentreihenfolge),
-  // dann pro Artikel das nächste noch unverbrauchte Datum danach zuweisen.
-  // Ein Datumstreffer wird höchstens einmal verwendet und maximal ~800
-  // Zeichen nach dem Artikel akzeptiert, damit kein Datum eines späteren,
-  // komplett anderen Artikels fälschlich zugeordnet wird.
-  const orderedEntries = [...byId.entries()].sort((a, b) => a[1].lastEnd - b[1].lastEnd);
-  const datesById = new Map<string, string>();
-  let dateCursor = 0;
-  const MAX_DISTANCE = 800;
-
-  for (const [id, entry] of orderedEntries) {
-    while (dateCursor < dateMatches.length && dateMatches[dateCursor].index < entry.lastEnd) {
-      dateCursor++;
-    }
-    const candidate = dateMatches[dateCursor];
-    if (candidate && candidate.iso && candidate.index - entry.lastEnd <= MAX_DISTANCE) {
-      datesById.set(id, candidate.iso);
-      dateCursor++; // dieses Datum ist verbraucht, nicht nochmal vergeben
+    if (!byId.has(id)) {
+      byId.set(id, resolveTagblattUrl(decodeEntities(match[1])));
     }
   }
+  return [...byId.entries()].map(([id, url]) => ({ id, url }));
+}
 
-  const items: NewsItem[] = [];
-  for (const [id, { url, texts }] of byId) {
-    const candidates = [...new Set(texts)].filter(
-      (t) => t.toLowerCase() !== "weiterlesen" && t.length > 2
+interface TagblattDetail {
+  title: string;
+  summary: string;
+  publishedAt: string | null;
+}
+
+async function fetchTagblattDetail(url: string): Promise<TagblattDetail | null> {
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" } });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    const titleMatch = html.match(/<h1>\s*([\s\S]*?)\s*<\/h1>/i);
+    const title = titleMatch ? clean(titleMatch[1].replace(/<[^>]+>/g, " ")) : "";
+
+    const vorspannMatch = html.match(/<div class="vorspann">\s*<p>\s*([\s\S]*?)\s*<\/p>/i);
+    const summary = vorspannMatch ? clean(vorspannMatch[1].replace(/<[^>]+>/g, " ")).slice(0, 600) : "";
+
+    const timestampMatch = html.match(
+      /<span class="timestamp">\s*(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})\s*<\/span>/i
     );
-    if (candidates.length === 0) continue;
-    const sorted = [...candidates].sort((a, b) => a.length - b.length);
-    const title = sorted[0];
-    const summary = sorted[sorted.length - 1] === title ? "" : sorted[sorted.length - 1];
+    let publishedAt: string | null = null;
+    if (timestampMatch) {
+      const [, day, month, year, hour, minute] = timestampMatch;
+      const d = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
+      if (!isNaN(d.getTime())) publishedAt = d.toISOString();
+    }
 
-    items.push({
-      id: `${TAGBLATT_SOURCE.key}::${id}`,
-      source: TAGBLATT_SOURCE.key,
-      source_label: TAGBLATT_SOURCE.label,
-      title,
-      link: url,
-      summary: summary.slice(0, 600),
-      published_at: datesById.get(id) ?? null,
-    });
+    return { title, summary, publishedAt };
+  } catch {
+    return null;
   }
-  return items;
 }
 
 async function fetchBaugesuche(): Promise<NewsItem[]> {
