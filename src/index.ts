@@ -188,11 +188,14 @@ async function fetchTagblatt(): Promise<NewsItem[]> {  const res = await fetch(T
   return parseTagblattHtml(html);
 }
 
-// Löst relative Pfade (z.B. "/zuerich/aktuell?...") zu absoluten URLs auf -
-// ohne das würde der Browser sie fälschlicherweise gegen die Worker-Domain
-// statt gegen tagblattzuerich.ch auflösen.
+// Löst relative Pfade (z.B. "/zuerich/aktuell?...") zu absoluten URLs auf
+// und normalisiert IMMER auf "www.tagblattzuerich.ch" - im HTML tauchen
+// teils schon absolute URLs auf, aber ohne "www.", was ohne Korrektur zu
+// kaputten Links führt.
 function resolveTagblattUrl(raw: string): string {
-  if (/^https?:\/\//i.test(raw)) return raw;
+  const domainMatch = raw.match(/^https?:\/\/(?:www\.)?tagblattzuerich\.ch(\/.*)$/i);
+  if (domainMatch) return `https://www.tagblattzuerich.ch${domainMatch[1]}`;
+  if (/^https?:\/\//i.test(raw)) return raw; // anderer Host - unverändert lassen
   const path = raw.startsWith("/") ? raw : `/${raw}`;
   return `https://www.tagblattzuerich.ch${path}`;
 }
