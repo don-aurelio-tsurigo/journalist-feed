@@ -721,6 +721,26 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     return new Response(JSON.stringify({ ok: true }), { headers });
   }
 
+  if (url.pathname === "/api/items/bulk-status" && request.method === "POST") {
+    const body = (await request.json()) as { ids?: string[]; status?: string };
+    if (!body.status || !ALLOWED_STATUSES.includes(body.status)) {
+      return new Response(JSON.stringify({ error: "Ungültiger Status" }), { status: 400, headers });
+    }
+    const ids = Array.isArray(body.ids) ? body.ids.filter((id) => typeof id === "string" && id) : [];
+    if (ids.length === 0) {
+      return new Response(JSON.stringify({ error: "Keine IDs übergeben" }), { status: 400, headers });
+    }
+    const stmt = env.DB.prepare("UPDATE news_items SET status = ? WHERE id = ?");
+    // In Batches, damit auch grössere Mehrfachauswahlen (>50) nicht an
+    // internen Limits scheitern.
+    const batchSize = 50;
+    for (let i = 0; i < ids.length; i += batchSize) {
+      const chunk = ids.slice(i, i + batchSize);
+      await env.DB.batch(chunk.map((id) => stmt.bind(body.status, id)));
+    }
+    return new Response(JSON.stringify({ ok: true, updated: ids.length }), { headers });
+  }
+
   const draftDiscardMatch = url.pathname.match(/^\/api\/items\/(.+)\/draft\/discard$/);
   if (draftDiscardMatch && request.method === "POST") {
     const id = decodeURIComponent(draftDiscardMatch[1]);
