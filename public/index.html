@@ -277,6 +277,60 @@
     cursor: pointer;
   }
   .draft .discard-btn:hover { background: var(--warn); color: white; }
+
+  .fulltext {
+    display: none;
+  }
+  .fulltext.open {
+    display: block;
+    margin-top: 12px;
+    border-top: 2px dashed var(--line);
+    padding-top: 12px;
+  }
+  .fulltext label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--ink-soft);
+    margin-bottom: 4px;
+  }
+  .fulltext textarea {
+    width: 100%;
+    min-height: 140px;
+    font-family: "Inter", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 10px;
+    border: 2px solid var(--ink);
+    background: var(--paper);
+    color: var(--ink);
+    resize: vertical;
+  }
+  .fulltext-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .fulltext-actions button {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 6px 14px;
+    border: 2px solid var(--blue);
+    background: var(--paper);
+    color: var(--blue-deep);
+    cursor: pointer;
+  }
+  .fulltext-actions button:hover { background: var(--blue); color: white; }
+  .fulltext-actions button.clear-btn {
+    border-color: var(--warn);
+    color: var(--warn);
+  }
+  .fulltext-actions button.clear-btn:hover { background: var(--warn); color: white; }
+  .fulltext-actions button:disabled { opacity: 0.6; cursor: default; }
   .draft label {
     display: block;
     font-size: 11px;
@@ -523,6 +577,57 @@
     draftBox.querySelector(".discard-btn").addEventListener("click", () => discardDraft(id, draftBtn, draftBox));
   }
 
+  async function toggleFulltextBox(item, fulltextBox, fulltextBtn) {
+    if (fulltextBox.classList.contains("open")) {
+      fulltextBox.classList.remove("open");
+      fulltextBox.innerHTML = "";
+      return;
+    }
+    fulltextBox.classList.add("open");
+    fulltextBox.innerHTML = `
+      <label>Volltext (manuell eingefügt, z.B. hinter Paywall kopiert)</label>
+      <textarea placeholder="Artikeltext hier einfügen...">${item.manual_fulltext || ""}</textarea>
+      <div class="fulltext-actions">
+        <button class="save-btn" type="button">Speichern</button>
+        ${item.manual_fulltext ? '<button class="clear-btn" type="button">Entfernen</button>' : ""}
+      </div>
+    `;
+    const textarea = fulltextBox.querySelector("textarea");
+    const saveBtn = fulltextBox.querySelector(".save-btn");
+    saveBtn.addEventListener("click", async () => {
+      const text = textarea.value.trim();
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Speichert...";
+      await fetch(`/api/items/${encodeURIComponent(item.id)}/fulltext`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      item.manual_fulltext = text;
+      fulltextBtn.textContent = text ? "Volltext bearbeiten" : "Volltext einfügen";
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Gespeichert!";
+      setTimeout(() => {
+        fulltextBox.classList.remove("open");
+        fulltextBox.innerHTML = "";
+      }, 800);
+    });
+    const clearBtn = fulltextBox.querySelector(".clear-btn");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", async () => {
+        await fetch(`/api/items/${encodeURIComponent(item.id)}/fulltext`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: "" }),
+        });
+        item.manual_fulltext = "";
+        fulltextBtn.textContent = "Volltext einfügen";
+        fulltextBox.classList.remove("open");
+        fulltextBox.innerHTML = "";
+      });
+    }
+  }
+
   function renderItem(item) {
     const div = document.createElement("div");
     div.className = "item";
@@ -536,6 +641,7 @@
         <div class="byline">${formatDate(item.published_at || item.fetched_at)}</div>
         <p class="summary">${item.summary || ""}</p>
         <div class="actions"></div>
+        <div class="fulltext"></div>
         <div class="draft"></div>
       </div>
     `;
@@ -550,12 +656,18 @@
 
     const actions = div.querySelector(".actions");
     const draftBox = div.querySelector(".draft");
+    const fulltextBox = div.querySelector(".fulltext");
 
     const draftBtn = document.createElement("button");
     draftBtn.className = "primary";
     draftBtn.textContent = item.draft_text ? "Artikel neu entwerfen" : "Artikel entwerfen";
     draftBtn.addEventListener("click", () => generateDraft(item.id, draftBtn, draftBox));
     actions.appendChild(draftBtn);
+
+    const fulltextBtn = document.createElement("button");
+    fulltextBtn.textContent = item.manual_fulltext ? "Volltext bearbeiten" : "Volltext einfügen";
+    fulltextBtn.addEventListener("click", () => toggleFulltextBox(item, fulltextBox, fulltextBtn));
+    actions.appendChild(fulltextBtn);
 
     const buttons = [
       ["interessant", "Interessant"],
