@@ -115,6 +115,58 @@
     background: var(--paper);
     padding: 16px 18px 18px;
   }
+  .select-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    width: fit-content;
+  }
+  .select-checkbox {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--blue);
+    cursor: pointer;
+  }
+  .select-row .tag { margin-bottom: 0; }
+  .bulk-bar {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--ink);
+    color: white;
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .bulk-bar.show { display: flex; }
+  .bulk-bar span {
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .bulk-bar-actions { display: flex; gap: 8px; }
+  .bulk-bar-actions button {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 6px 14px;
+    border: 2px solid white;
+    background: transparent;
+    color: white;
+    cursor: pointer;
+  }
+  .bulk-bar-actions button:hover { background: rgba(255,255,255,0.15); }
+  .bulk-bar-actions button.danger {
+    background: var(--warn);
+    border-color: var(--warn);
+  }
+  .bulk-bar-actions button.danger:hover { opacity: 0.85; }
+  .bulk-bar-actions button:disabled { opacity: 0.5; cursor: default; }
   .tag {
     display: inline-block;
     background: var(--ink);
@@ -280,17 +332,61 @@
   <div class="tabs sources" id="sourceTabs">
     <div class="tab active" data-source="">Alle Quellen</div>
   </div>
+  <div class="bulk-bar" id="bulkBar">
+    <span id="bulkCount">0 ausgewählt</span>
+    <div class="bulk-bar-actions">
+      <button id="bulkDiscardBtn" class="danger" type="button">Verwerfen</button>
+      <button id="bulkClearBtn" type="button">Auswahl aufheben</button>
+    </div>
+  </div>
   <div id="list"></div>
 </main>
 
 <script>
   let currentStatus = "neu";
   let currentSource = "";
+  const selectedIds = new Set();
 
   const tabsEl = document.getElementById("tabs");
   const sourceTabsEl = document.getElementById("sourceTabs");
   const listEl = document.getElementById("list");
   const refreshBtn = document.getElementById("refreshBtn");
+  const bulkBar = document.getElementById("bulkBar");
+  const bulkCount = document.getElementById("bulkCount");
+  const bulkDiscardBtn = document.getElementById("bulkDiscardBtn");
+  const bulkClearBtn = document.getElementById("bulkClearBtn");
+
+  function updateBulkBar() {
+    if (selectedIds.size === 0) {
+      bulkBar.classList.remove("show");
+      return;
+    }
+    bulkCount.textContent = `${selectedIds.size} ausgewählt`;
+    bulkBar.classList.add("show");
+  }
+
+  bulkClearBtn.addEventListener("click", () => {
+    selectedIds.clear();
+    document.querySelectorAll(".select-checkbox").forEach((cb) => (cb.checked = false));
+    updateBulkBar();
+  });
+
+  bulkDiscardBtn.addEventListener("click", async () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`${selectedIds.size} Einträge wirklich verwerfen?`)) return;
+    bulkDiscardBtn.disabled = true;
+    try {
+      await fetch("/api/items/bulk-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [...selectedIds], status: "verworfen" }),
+      });
+    } finally {
+      bulkDiscardBtn.disabled = false;
+      selectedIds.clear();
+      loadItems();
+    }
+  });
 
   tabsEl.addEventListener("click", (e) => {
     const tab = e.target.closest(".tab");
@@ -432,7 +528,10 @@
     div.className = "item";
     div.innerHTML = `
       <div class="item-inner">
-        <span class="tag">${item.source_label}</span>
+        <label class="select-row">
+          <input type="checkbox" class="select-checkbox" />
+          <span class="tag">${item.source_label}</span>
+        </label>
         <h2><a href="${item.link}" target="_blank" rel="noopener">${item.title}</a></h2>
         <div class="byline">${formatDate(item.published_at || item.fetched_at)}</div>
         <p class="summary">${item.summary || ""}</p>
@@ -440,6 +539,14 @@
         <div class="draft"></div>
       </div>
     `;
+
+    const checkbox = div.querySelector(".select-checkbox");
+    checkbox.checked = selectedIds.has(item.id);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedIds.add(item.id);
+      else selectedIds.delete(item.id);
+      updateBulkBar();
+    });
 
     const actions = div.querySelector(".actions");
     const draftBox = div.querySelector(".draft");
@@ -472,6 +579,8 @@
   }
 
   async function loadItems() {
+    selectedIds.clear();
+    updateBulkBar();
     const params = new URLSearchParams();
     if (currentStatus) params.set("status", currentStatus);
     if (currentSource) params.set("source", currentSource);
