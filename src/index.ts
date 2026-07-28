@@ -53,13 +53,17 @@ const SOURCES: FeedSource[] = [
 // übernehmen. Läuft der Cron alle 15 Min, reicht ein moderater Puffer.
 const GEMEINDERAT_MAX_AGE_DAYS = 45;
 
-// Baugesuche Kanton Zürich via die offene Amtsblattportal-API (kein Login
-// nötig für publizierte Meldungen). Rubrik "BP" = Baupublikationen. Die
-// Bulk-CSV-Liste enthält nur Metadaten (Datum, ID, Nummer) - der eigentliche
-// Baubeschrieb steckt nur im signierten PDF pro Publikation, das wir hier
-// bewusst nicht auslesen (siehe Absprache: keine PDF-Textextraktion vorerst).
-const BAUGESUCHE_SOURCE = { key: "baugesuche-zh", label: "Baugesuche Kanton Zürich" };
+// Baugesuche Stadt Zürich via die offene Amtsblattportal-API (kein Login
+// nötig für publizierte Meldungen). Wichtig: nicht "rubrics=BP" (liefert
+// nichts), sondern die Subrubrik "BP-ZH01" ("Kommunales Bauprojekt" im
+// Tenant kabzh). Das Feld "registrationOfficeTown" wird client-seitig auf
+// "Zürich" gefiltert, weil die Subrubrik den ganzen Kanton umfasst, nicht
+// nur die Stadt. "titleDe" aus der CSV liefert bereits einen brauchbaren
+// Titel (z.B. "Bauprojekt: Culmannstrasse 65, Zürich") - keine
+// PDF-Extraktion nötig für einen sinnvollen Titel.
+const BAUGESUCHE_SOURCE = { key: "baugesuche-zh", label: "Baugesuche Stadt Zürich" };
 const BAUGESUCHE_MAX_AGE_DAYS = 30;
+const BAUGESUCHE_TOWN = "Zürich";
 
 // Baugesuche Kanton Zürich (opendata.swiss) sind als GPKG (Geopackage)
 // publiziert, kein einfaches RSS/CSV. Das lohnt sich als eigener zweiter
@@ -159,10 +163,11 @@ async function runFetchCycle(env: Env): Promise<{ source: string; count: number;
 async function fetchBaugesuche(): Promise<NewsItem[]> {
   const cutoff = new Date(Date.now() - BAUGESUCHE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000);
   const cutoffStr = cutoff.toISOString().slice(0, 10); // YYYY-MM-DD
+  const sortParam = encodeURIComponent("column:PUBLICATION_DATE|direction:DESC");
   const url =
     `https://amtsblattportal.ch/api/v1/publications/csv?publicationStates=PUBLISHED` +
-    `&rubrics=BP&cantons=ZH&publicationDate.start=${cutoffStr}` +
-    `&pageRequest.sortOrders=column:PUBLICATION_DATE|direction:DESC&pageRequest.size=100`;
+    `&subRubrics=BP-ZH01&publicationDate.start=${cutoffStr}` +
+    `&pageRequest.sortOrders=${sortParam}&pageRequest.size=200`;
 
   const res = await fetch(url, { headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" } });
   if (!res.ok) throw new Error(`Amtsblattportal API ${res.status}`);
@@ -170,72 +175,108 @@ async function fetchBaugesuche(): Promise<NewsItem[]> {
   return parseBaugesucheCsv(csvText);
 }
 
-// CSV-Parser, der sich anhand der Kopfzeile orientiert statt fixe
-// Spaltenpositionen anzunehmen - robuster gegen Schema-Änderungen der API.
+// Vollwertiger CSV-Parser (kein naives Line-Splitting!): Felder können in
+// Anführungszeichen echte Zeilenumbrüche enthalten (z.B. "legalRemedy"),
+// daher muss der ganze Text zeichenweise durchlaufen werden statt vorher
+// nach "\n" zu splitten.
+function parseCsvRecords(text: string, delimiter: string): string[][] {
+  const records: string[][] = [];
+  let field = "";
+  let record: string[] = [];
+  let inQuotes = false;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      field += ch;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = true;
+      i++;
+      continue;
+    }
+    if (ch === delimiter) {
+      record.push(field);
+      field = "";
+      i++;
+      continue;
+    }
+    if (ch === "\r") {
+      i++;
+      continue;
+    }
+    if (ch === "\n") {
+      record.push(field);
+      records.push(record);
+      field = "";
+      record = [];
+      i++;
+      continue;
+    }
+    field += ch;
+    i++;
+  }
+  if (field.length > 0 || record.length > 0) {
+    record.push(field);
+    records.push(record);
+  }
+  return records;
+}
+
+// Filtert clientseitig auf Stadt Zürich, da die Subrubrik BP-ZH01 den
+// ganzen Kanton umfasst.
 function parseBaugesucheCsv(csv: string): NewsItem[] {
-  const lines = csv.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length < 2) return [];
+  const records = parseCsvRecords(csv, ";").filter((r) => r.some((cell) => cell.trim() !== ""));
+  if (records.length < 2) return [];
 
-  const delimiter = lines[0].includes(";") && !lines[0].includes(",") ? ";" : ",";
-  const headers = splitCsvLine(lines[0], delimiter).map((h) => h.trim().toLowerCase());
-
+  const headers = records[0].map((h) => h.trim().toLowerCase());
   const idIdx = headers.indexOf("id");
-  const dateIdx = headers.findIndex((h) => h.includes("publicationdate"));
-  const numberIdx = headers.findIndex((h) => h.includes("publicationnumber"));
-  const officeIdx = headers.findIndex((h) => h.includes("registrationoffice") && h.includes("displayname"));
-  const townIdx = headers.findIndex((h) => h.includes("town") || h.includes("municipality"));
+  const dateIdx = headers.indexOf("publicationdate");
+  const numberIdx = headers.indexOf("publicationnumber");
+  const townIdx = headers.indexOf("registrationofficetown");
+  const officeIdx = headers.indexOf("registrationofficedisplayname");
+  const titleDeIdx = headers.indexOf("titlede");
 
   if (idIdx < 0) return []; // Unerwartetes CSV-Format - lieber nichts als Falsches liefern
 
   const items: NewsItem[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = splitCsvLine(lines[i], delimiter);
+  for (let i = 1; i < records.length; i++) {
+    const cols = records[i];
     const id = cols[idIdx]?.trim();
     if (!id) continue;
 
-    const dateRaw = dateIdx >= 0 ? cols[dateIdx]?.trim() : "";
-    const publishedAt = dateRaw ? safeDate(dateRaw) ?? parseSwissDate(dateRaw) : null;
     const town = townIdx >= 0 ? cols[townIdx]?.trim() : "";
-    const office = officeIdx >= 0 ? cols[officeIdx]?.trim() : "";
+    if (town !== BAUGESUCHE_TOWN) continue; // nur Stadt Zürich, nicht ganzer Kanton
+
+    const dateRaw = dateIdx >= 0 ? cols[dateIdx]?.trim() : "";
+    const publishedAt = dateRaw ? safeDate(dateRaw) : null;
     const publicationNumber = numberIdx >= 0 ? cols[numberIdx]?.trim() : id.slice(0, 8);
-    const location = town || office || "Kanton Zürich";
+    const titleDe = titleDeIdx >= 0 ? cols[titleDeIdx]?.trim() : "";
+    const office = officeIdx >= 0 ? cols[officeIdx]?.trim() : "";
 
     items.push({
       id: `${BAUGESUCHE_SOURCE.key}::${id}`.slice(0, 500),
       source: BAUGESUCHE_SOURCE.key,
       source_label: BAUGESUCHE_SOURCE.label,
-      title: `Baugesuch publiziert – ${location} (Nr. ${publicationNumber})`,
+      title: titleDe || `Baugesuch publiziert – Zürich (Nr. ${publicationNumber})`,
       link: `https://amtsblattportal.ch/api/v1/publications/${id}/pdf`,
-      summary: "Details (Baubeschrieb, Adresse, Auflagefrist) nur im signierten PDF verfügbar.",
+      summary: office ? `Zuständige Stelle: ${office}` : "",
       published_at: publishedAt,
     });
   }
   return items;
-}
-
-// Sehr simpler CSV-Zeilen-Splitter mit Unterstützung für gequotete Felder.
-function splitCsvLine(line: string, delimiter: string): string[] {
-  const result: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        cur += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === delimiter && !inQuotes) {
-      result.push(cur);
-      cur = "";
-    } else {
-      cur += ch;
-    }
-  }
-  result.push(cur);
-  return result;
 }
 
 async function upsertItems(env: Env, items: NewsItem[]) {
