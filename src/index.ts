@@ -201,12 +201,15 @@ function resolveTagblattUrl(raw: string): string {
 // "tx_news_pi1[action]=detail...[news]=<ID>". Jede News-ID taucht mehrfach
 // auf (Bild-Link, Titel-Link, "Weiterlesen"-Link) - wir sammeln pro ID alle
 // Anker-Texte und wählen den kürzesten sinnvollen als Titel (Schlagzeile)
-// und den längsten als Teaser/Summary. Datum wird best-effort per
-// Positions-Zuordnung ("Aktuell TT.MM.JJJJ - HH:MM") zugewiesen.
+// und den längsten als Teaser/Summary. Datum wird per Zeiger-Zuordnung
+// gefunden: für jeden Artikel (sortiert nach Position seines letzten Links
+// im Dokument) wird das nächste noch unverbrauchte Datum danach genommen -
+// robuster als eine strikte 1:1-Zählung, die schon bei einem einzigen
+// zusätzlichen/fehlenden Datumstreffer im ganzen Dokument komplett versagt.
 function parseTagblattHtml(html: string): NewsItem[] {
   const linkRegex =
     /<a\b[^>]*href="([^"]*tx_news_pi1%5Baction%5D=detail[^"]*news%5D=(\d+)[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
-  const byId = new Map<string, { url: string; texts: string[] }>();
+  const byId = new Map<string, { url: string; texts: string[]; lastEnd: number }>();
   let match: RegExpExecArray | null;
 
   while ((match = linkRegex.exec(html)) !== null) {
@@ -214,21 +217,42 @@ function parseTagblattHtml(html: string): NewsItem[] {
     const id = match[2];
     const text = clean(match[3].replace(/<[^>]+>/g, " "));
     const url = resolveTagblattUrl(decodeEntities(rawUrl));
-    if (!byId.has(id)) byId.set(id, { url, texts: [] });
-    if (text) byId.get(id)!.texts.push(text);
+    const end = match.index + match[0].length;
+    if (!byId.has(id)) byId.set(id, { url, texts: [], lastEnd: end });
+    const entry = byId.get(id)!;
+    if (text) entry.texts.push(text);
+    entry.lastEnd = Math.max(entry.lastEnd, end);
   }
 
-  // Datumsangaben in Dokumentreihenfolge einsammeln, um sie später
-  // positionsbasiert den Artikeln zuzuordnen (best effort).
-  const dateMatches = [...html.matchAll(/(\d{2})\.(\d{2})\.(\d{4})\s*-\s*(\d{2}):(\d{2})/g)];
-  const orderedIds = [...byId.keys()]; // Map bewahrt Einfügereihenfolge = Dokumentreihenfolge
-  const datesById = new Map<string, string>();
-  if (dateMatches.length === orderedIds.length) {
-    orderedIds.forEach((id, i) => {
-      const [, day, month, year, hour, minute] = dateMatches[i];
+  // Alle Datumsangaben im Dokument mit ihrer Position einsammeln.
+  const dateMatches = [...html.matchAll(/(\d{2})\.(\d{2})\.(\d{4})\s*-\s*(\d{2}):(\d{2})/g)].map((m) => ({
+    index: m.index ?? 0,
+    iso: (() => {
+      const [, day, month, year, hour, minute] = m;
       const d = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
-      if (!isNaN(d.getTime())) datesById.set(id, d.toISOString());
-    });
+      return isNaN(d.getTime()) ? null : d.toISOString();
+    })(),
+  }));
+
+  // Artikel nach Position ihres letzten Links sortieren (= Dokumentreihenfolge),
+  // dann pro Artikel das nächste noch unverbrauchte Datum danach zuweisen.
+  // Ein Datumstreffer wird höchstens einmal verwendet und maximal ~800
+  // Zeichen nach dem Artikel akzeptiert, damit kein Datum eines späteren,
+  // komplett anderen Artikels fälschlich zugeordnet wird.
+  const orderedEntries = [...byId.entries()].sort((a, b) => a[1].lastEnd - b[1].lastEnd);
+  const datesById = new Map<string, string>();
+  let dateCursor = 0;
+  const MAX_DISTANCE = 800;
+
+  for (const [id, entry] of orderedEntries) {
+    while (dateCursor < dateMatches.length && dateMatches[dateCursor].index < entry.lastEnd) {
+      dateCursor++;
+    }
+    const candidate = dateMatches[dateCursor];
+    if (candidate && candidate.iso && candidate.index - entry.lastEnd <= MAX_DISTANCE) {
+      datesById.set(id, candidate.iso);
+      dateCursor++; // dieses Datum ist verbraucht, nicht nochmal vergeben
+    }
   }
 
   const items: NewsItem[] = [];
