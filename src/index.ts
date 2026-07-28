@@ -187,11 +187,19 @@ async function runFetchCycle(env: Env): Promise<{ source: string; count: number;
   return results;
 }
 
-async function fetchTagblatt(): Promise<NewsItem[]> {
-  const res = await fetch(TAGBLATT_URL, { headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" } });
+async function fetchTagblatt(): Promise<NewsItem[]> {  const res = await fetch(TAGBLATT_URL, { headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" } });
   if (!res.ok) throw new Error(`Tagblatt HTTP ${res.status}`);
   const html = await res.text();
   return parseTagblattHtml(html);
+}
+
+// Löst relative Pfade (z.B. "/zuerich/aktuell?...") zu absoluten URLs auf -
+// ohne das würde der Browser sie fälschlicherweise gegen die Worker-Domain
+// statt gegen tagblattzuerich.ch auflösen.
+function resolveTagblattUrl(raw: string): string {
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const path = raw.startsWith("/") ? raw : `/${raw}`;
+  return `https://www.tagblattzuerich.ch${path}`;
 }
 
 // Heuristischer Scraper: TYPO3-News-Detaillinks enthalten alle das Muster
@@ -210,7 +218,7 @@ function parseTagblattHtml(html: string): NewsItem[] {
     const rawUrl = match[1];
     const id = match[2];
     const text = clean(match[3].replace(/<[^>]+>/g, " "));
-    const url = decodeEntities(rawUrl);
+    const url = resolveTagblattUrl(decodeEntities(rawUrl));
     if (!byId.has(id)) byId.set(id, { url, texts: [] });
     if (text) byId.get(id)!.texts.push(text);
   }
@@ -651,45 +659,6 @@ function finishParse(jsonText: string): DraftResult {
 }
 
 // ---------------------------------------------------------------------------
-// Prüft serverseitig (ohne Browser-CORS-Einschränkungen), ob eine Seite sich
-// per iFrame einbetten lässt. Browser können das selbst nicht zuverlässig
-// erkennen, weil sie den Fehler nur intern anzeigen (z.B. Firefox' eigene
-// "darf nicht öffnen"-Seite lädt "erfolgreich" innerhalb des iFrames).
-// ---------------------------------------------------------------------------
-async function checkEmbeddable(target: string): Promise<boolean> {
-  try {
-    let res = await fetch(target, {
-      method: "HEAD",
-      headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" },
-    });
-    // Manche Server unterstützen kein HEAD -> auf GET zurückfallen, Body verwerfen.
-    if (res.status === 405 || res.status === 501) {
-      res = await fetch(target, {
-        method: "GET",
-        headers: { "User-Agent": "TsueriNewsFeed/1.0 (+https://tsri.ch)" },
-      });
-      res.body?.cancel();
-    }
-
-    const xfo = (res.headers.get("x-frame-options") || "").toLowerCase();
-    if (xfo.includes("deny") || xfo.includes("sameorigin")) return false;
-
-    const csp = (res.headers.get("content-security-policy") || "").toLowerCase();
-    const frameAncestorsMatch = csp.match(/frame-ancestors\s+([^;]+)/);
-    if (frameAncestorsMatch) {
-      const value = frameAncestorsMatch[1].trim();
-      if (value === "'none'" || value === "'self'") return false;
-    }
-
-    return true;
-  } catch {
-    // Bei Fehlern (Timeout, Netzwerk) im Zweifel embeddable annehmen -
-    // das Frontend hat ohnehin noch den Zeit-Fallback als zweite Absicherung.
-    return true;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // API
 // ---------------------------------------------------------------------------
 
@@ -699,15 +668,6 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   if (url.pathname === "/api/sources" && request.method === "GET") {
     const all = [...SOURCES.map((s) => ({ key: s.key, label: s.label })), BAUGESUCHE_SOURCE, TAGBLATT_SOURCE];
     return new Response(JSON.stringify(all), { headers });
-  }
-
-  if (url.pathname === "/api/check-embeddable" && request.method === "GET") {
-    const target = url.searchParams.get("url");
-    if (!target) {
-      return new Response(JSON.stringify({ error: "url fehlt" }), { status: 400, headers });
-    }
-    const embeddable = await checkEmbeddable(target);
-    return new Response(JSON.stringify({ embeddable }), { headers });
   }
 
   if (url.pathname === "/api/items" && request.method === "GET") {
