@@ -36,11 +36,6 @@ const SOURCES: FeedSource[] = [
     url: "https://www.stadt-zuerich.ch/de/aktuell/medienmitteilungen/_jcr_content/mainparsys/teaser.rss",
   },
   {
-    key: "stadtpolizei-zuerich",
-    label: "Stadtpolizei Zürich",
-    url: "https://www.stadt-zuerich.ch/de/politik-und-verwaltung/stadtverwaltung/sid/stapo/_jcr_content/mainparsys/teaser.rss", // TODO: verifizieren
-  },
-  {
     key: "gemeinderat-zuerich",
     label: "Gemeinderat Zürich",
     url: "https://www.gemeinderat-zuerich.ch/de/geschaefte/export.php?export=rss",
