@@ -18,6 +18,10 @@ interface FeedSource {
   key: string;
   label: string;
   url: string;
+  // true = automatischer Volltext-Fetch liefert bei dieser Quelle
+  // verlässlich nur einen dünnen Teaser (z.B. Paywall) - Frontend blockiert
+  // dann "Artikel entwerfen", bis manuell Volltext eingefügt wurde.
+  requiresFulltext?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -44,6 +48,7 @@ const SOURCES: FeedSource[] = [
     key: "tagesanzeiger-zuerich",
     label: "Tages-Anzeiger Zürich",
     url: "https://partner-feeds.publishing.tamedia.ch/rss/tagesanzeiger/zuerich",
+    requiresFulltext: true, // Tamedia-Paywall - RSS liefert nur Teaser
   },
   {
     key: "20min-zuerich",
@@ -688,7 +693,11 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   const headers = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json; charset=utf-8" };
 
   if (url.pathname === "/api/sources" && request.method === "GET") {
-    const all = [...SOURCES.map((s) => ({ key: s.key, label: s.label })), BAUGESUCHE_SOURCE, TAGBLATT_SOURCE];
+    const all = [
+      ...SOURCES.map((s) => ({ key: s.key, label: s.label, requiresFulltext: !!s.requiresFulltext })),
+      { ...BAUGESUCHE_SOURCE, requiresFulltext: false },
+      { ...TAGBLATT_SOURCE, requiresFulltext: false },
+    ];
     return new Response(JSON.stringify(all), { headers });
   }
 
@@ -773,6 +782,16 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     const item = await env.DB.prepare("SELECT * FROM news_items WHERE id = ?").bind(id).first();
     if (!item) {
       return new Response(JSON.stringify({ error: "Item nicht gefunden" }), { status: 404, headers });
+    }
+    const sourceConfig = SOURCES.find((s) => s.key === item.source);
+    const hasManualText = typeof item.manual_fulltext === "string" && item.manual_fulltext.trim().length > 0;
+    if (sourceConfig?.requiresFulltext && !hasManualText) {
+      return new Response(
+        JSON.stringify({
+          error: "Diese Quelle liefert nur einen Teaser (Paywall). Bitte zuerst Volltext einfügen.",
+        }),
+        { status: 422, headers }
+      );
     }
     try {
       const draft = await generateDraft(env, item);
