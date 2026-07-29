@@ -55,6 +55,12 @@ const SOURCES: FeedSource[] = [
     label: "20 Minuten Zürich",
     url: "https://partner-feeds.20min.ch/rss/20minuten/regionen/zuerich",
   },
+  {
+    key: "nzz-zuerich",
+    label: "NZZ Zürich",
+    url: "https://www.nzz.ch/zuerich.rss",
+    requiresFulltext: true, // NZZ-Paywall - RSS liefert nur Teaser
+  },
 ];
 
 // Tagblatt der Stadt Zürich hat kein RSS - wird per HTML-Scraping der
