@@ -61,6 +61,17 @@ const SOURCES: FeedSource[] = [
     url: "https://www.nzz.ch/zuerich.rss",
     requiresFulltext: true, // NZZ-Paywall - RSS liefert nur Teaser
   },
+  {
+    key: "blick-zuerich",
+    label: "Blick Zürich",
+    url: "https://www.blick.ch/schweiz/zuerich/rss.xml",
+  },
+  {
+    key: "srf-regionaljournal-zh-sh",
+    label: "SRF Regionaljournal ZH/SH",
+    url: "https://www.srf.ch/feed/podcast/sd/5e266ba0-f769-4d6d-bd41-e01f188dd106.xml",
+    requiresFulltext: true, // Audio-first - nur kurzer Teaser, kein Transkript
+  },
 ];
 
 // Tagblatt der Stadt Zürich hat kein RSS - wird per HTML-Scraping der
