@@ -498,14 +498,29 @@ function parseRss(xml: string, sourceKey: string, sourceLabel: string): NewsItem
   let match: RegExpExecArray | null;
   const isGemeinderat = sourceKey === "gemeinderat-zuerich";
   const cutoff = isGemeinderat ? Date.now() - GEMEINDERAT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000 : null;
+  // SRF liefert im Feed nur den mp3-Direktlink (via <enclosure>) - für
+  // Menschen ist die normale Sendungsseite brauchbarer als ein Audio-Download.
+  const isSrfRegionaljournal = sourceKey === "srf-regionaljournal-zh-sh";
+  const SRF_SHOW_PAGE = "https://www.srf.ch/audio/regionaljournal-zuerich-schaffhausen";
 
   while ((match = itemRegex.exec(xml)) !== null) {
     const block = match[1];
     let title = clean(extractTag(block, "title"));
-    const link = clean(extractTag(block, "link"));
+    let link = clean(extractTag(block, "link"));
+    // Podcast-Feeds (z.B. SRF) haben oft kein <link>, nur <enclosure> mit
+    // der Audio-Datei-URL - als Fallback nutzen, sonst fällt der ganze
+    // Eintrag mangels Link weg.
+    if (!link) {
+      const enclosureMatch = block.match(/<enclosure\b[^>]*\burl="([^"]+)"/i);
+      if (enclosureMatch) link = decodeEntities(enclosureMatch[1]);
+    }
     const description = clean(extractTag(block, "description"));
     const pubDateRaw = extractTag(block, "pubDate");
+    // guid muss VOR dem Link-Überschreiben berechnet werden, sonst wären
+    // bei SRF alle Einträge identisch (gleicher fester Link als Fallback-ID).
     const guid = clean(extractTag(block, "guid")) || link;
+
+    if (isSrfRegionaljournal) link = SRF_SHOW_PAGE;
 
     if (!link || !title) continue;
 
